@@ -18,6 +18,4 @@ textColor = "#262730"
 
 [client]
 # Client settings for better performance
-caching = true
-displayEnabled = true
 showErrorDetails = false
