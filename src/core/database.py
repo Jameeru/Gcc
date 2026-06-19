@@ -134,7 +134,23 @@ class DatabaseManager:
             self._session_factory = sessionmaker(
                 bind=self.engine,
                 autocommit=False,
-                autoflush=False
+                autoflush=False,
+                # `get_session()` commits and closes a fresh session on every
+                # call (see below). With the SQLAlchemy default of
+                # expire_on_commit=True, that commit marks every attribute
+                # on every loaded ORM object as expired, so the *next*
+                # attribute access tries to refresh from the DB -- but the
+                # session is already closed by then, raising
+                # "Instance ... is not bound to a Session". This bit
+                # virtually every call site that returns/uses an ORM object
+                # after its `with db_manager.get_session():` block exits
+                # (e.g. SessionManager.authenticate_user reading user.id
+                # right after _get_user_by_passcode's session closed).
+                # Since each get_session() call is a brand-new, short-lived
+                # Session with no cross-call caching concerns, disabling
+                # commit-expiry is safe here and lets callers keep using the
+                # values they already loaded.
+                expire_on_commit=False,
             )
         return self._session_factory
     
