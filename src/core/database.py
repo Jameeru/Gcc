@@ -8,7 +8,7 @@ session management for Supabase PostgreSQL integration.
 import os
 from contextlib import contextmanager
 from typing import Generator, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote_plus
 
 from sqlalchemy import create_engine, text, Engine
 from sqlalchemy.orm import sessionmaker, Session
@@ -22,46 +22,81 @@ class DatabaseConfig:
     
     def __init__(self):
         """Initialize database configuration from environment variables."""
-        self.supabase_url = os.getenv('SUPABASE_URL')
-        self.supabase_key = os.getenv('SUPABASE_KEY')
+        # Prioritize DATABASE_URL if available
+        self.database_url = os.getenv('DATABASE_URL')
         
-        if not self.supabase_url:
-            raise ValueError("SUPABASE_URL environment variable is required")
-        if not self.supabase_key:
-            raise ValueError("SUPABASE_KEY environment variable is required")
+        if not self.database_url:
+            # Fallback to building from SUPABASE_URL and SUPABASE_KEY
+            self.supabase_url = os.getenv('SUPABASE_URL')
+            self.supabase_key = os.getenv('SUPABASE_KEY')
 
-        # Pool settings, read from the same env vars documented in
-        # .env.template (DB_POOL_SIZE / DB_POOL_RECYCLE / DB_ECHO_SQL) --
-        # previously these were hardcoded in the engine and the documented
-        # vars silently did nothing.
+            if not self.supabase_url:
+                raise ValueError("DATABASE_URL or SUPABASE_URL environment variable is required")
+            if not self.supabase_key:
+                raise ValueError("DATABASE_URL or SUPABASE_KEY environment variable is required")
+
+            # NOTE: SUPABASE_KEY is the Supabase *service-role API key* (a JWT),
+            # which is a different secret from the Postgres database password
+            # and can never be used as one. Building a raw Postgres connection
+            # from SUPABASE_URL/SUPABASE_KEY alone is therefore not possible --
+            # the actual DB password must come from SUPABASE_DB_PASSWORD.
+            self.supabase_db_password = os.getenv('SUPABASE_DB_PASSWORD')
+            if not self.supabase_db_password:
+                raise ValueError(
+                    "SUPABASE_DB_PASSWORD environment variable is required when falling back to "
+                    "SUPABASE_URL/SUPABASE_KEY. SUPABASE_KEY is a service-role API key, not a "
+                    "Postgres password, so it cannot be used to connect to the database. "
+                    "Strongly preferred: set DATABASE_URL instead, using the connection string "
+                    "from your Supabase project's Settings > Database > Connection Pooling page "
+                    "(the 'Session pooler' or 'Transaction pooler' URI). The pooler host is "
+                    "IPv4-compatible; the direct 'db.<ref>.supabase.co' host is IPv6-only on most "
+                    "projects and will fail to resolve on platforms like Streamlit Community Cloud."
+                )
+
+            # Build database URL from components
+            self.database_url = self._build_database_url()
+
+        # Pool settings
         self.pool_size = int(os.getenv("DB_POOL_SIZE", "5"))
         self.pool_recycle = int(os.getenv("DB_POOL_RECYCLE", "3600"))
         self.echo_sql = os.getenv("DB_ECHO_SQL", "false").lower() == "true"
-
-        # Parse Supabase URL to construct PostgreSQL connection string
-        self.database_url = self._build_database_url()
     
     def _build_database_url(self) -> str:
-        """Build PostgreSQL connection URL from Supabase configuration."""
-        # Check if DATABASE_URL is provided directly (preferred for Streamlit Cloud)
-        database_url = os.getenv('DATABASE_URL')
-        if database_url:
-            return database_url
-            
-        # Fallback to constructing from SUPABASE_URL and SUPABASE_KEY
+        """
+        Build a PostgreSQL connection URL from Supabase configuration.
+
+        WARNING: this constructs the *direct* connection hostname
+        (db.<project_ref>.supabase.co), which Supabase resolves to an
+        IPv6-only address for most projects. Hosting platforms without IPv6
+        egress (e.g. Streamlit Community Cloud) cannot reach it and will fail
+        with "could not translate host name ... to address: No address
+        associated with hostname". Prefer setting DATABASE_URL directly with
+        a Supabase connection-pooler URI (IPv4-compatible) instead of relying
+        on this fallback in production.
+        """
         parsed = urlparse(self.supabase_url)
-        
-        # Extract database connection details
-        host = parsed.hostname
+
+        # Extract database connection details - ensure we use the correct DB hostname
+        hostname = parsed.hostname
+        # For Supabase, the database hostname should be db.{project_ref}.supabase.co
+        if hostname and not hostname.startswith('db.'):
+            # If hostname is like nkkmdzphiwmowwzzqqwx.supabase.co, convert to db.nkkmdzphiwmowwzzqqwx.supabase.co
+            if '.supabase.co' in hostname:
+                project_ref = hostname.replace('.supabase.co', '')
+                hostname = f'db.{project_ref}.supabase.co'
+
         port = parsed.port or 5432
-        
-        # Use service_role key for direct database access
-        # In production, this should be the service role key with appropriate permissions
+
+        # Use the postgres user with the real DB password (a distinct secret
+        # from SUPABASE_KEY -- see SUPABASE_DB_PASSWORD validation above).
         username = 'postgres'
-        password = self.supabase_key
+        password = self.supabase_db_password
         database = 'postgres'  # Default Supabase database name
-        
-        return f"postgresql://{username}:{password}@{host}:{port}/{database}"
+
+        # URL encode the password to handle special characters
+        encoded_password = quote_plus(password)
+
+        return f"postgresql://{username}:{encoded_password}@{hostname}:{port}/{database}"
 
 
 class DatabaseManager:
