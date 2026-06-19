@@ -185,7 +185,7 @@ def render_history_page() -> None:
         display_df[
             ["Company", "Domain", "GCC Presence", "GCC Location", "Score", "Summary", "First Researched", "Last Updated"]
         ],
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
     )
 
@@ -207,7 +207,7 @@ def render_history_page() -> None:
             data=export_to_csv_bytes(rows),
             file_name=generate_export_filename("gcc_research_history", "csv"),
             mime="text/csv",
-            use_container_width=True,
+            width='stretch',
         )
     with exp_col2:
         st.download_button(
@@ -215,5 +215,5 @@ def render_history_page() -> None:
             data=export_to_excel_bytes(rows),
             file_name=generate_export_filename("gcc_research_history", "xlsx"),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width='stretch',
         )

@@ -121,7 +121,7 @@ def render_settings_tab() -> None:
         col_save, col_clear = st.columns(2)
         with col_save:
             save_clicked = st.form_submit_button(
-                "💾 Save Changes", type="primary", use_container_width=True
+                "💾 Save Changes", type="primary", width='stretch'
             )
         with col_clear:
             clear_options = [field["label"] for field in _SETTINGS_FIELDS]
@@ -133,7 +133,7 @@ def render_settings_tab() -> None:
                 "matching environment variable (if any) instead of the UI value.",
             )
             clear_clicked = st.form_submit_button(
-                "🗑️ Clear Selected", use_container_width=True
+                "🗑️ Clear Selected", width='stretch'
             )
 
     if save_clicked:

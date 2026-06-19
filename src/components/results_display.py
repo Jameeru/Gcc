@@ -195,7 +195,7 @@ def render_results_table(items: List[ProcessedItem]) -> None:
         "Summary",
         "Error",
     ]
-    st.dataframe(display_df[display_columns], use_container_width=True, hide_index=True)
+    st.dataframe(display_df[display_columns], width='stretch', hide_index=True)
 
     st.markdown("#### 📤 Export")
     export_rows = filtered_df.to_dict(orient="records")
@@ -208,7 +208,7 @@ def render_results_table(items: List[ProcessedItem]) -> None:
             data=csv_bytes,
             file_name=generate_export_filename("gcc_research_results", "csv"),
             mime="text/csv",
-            use_container_width=True,
+            width='stretch',
         )
 
     with exp_col2:
@@ -218,5 +218,5 @@ def render_results_table(items: List[ProcessedItem]) -> None:
             data=excel_bytes,
             file_name=generate_export_filename("gcc_research_results", "xlsx"),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width='stretch',
         )

@@ -181,7 +181,7 @@ def render_upload_widget() -> Optional[UploadOutcome]:
     
     st.success(f"✅ Loaded {len(df):,} rows, {len(df.columns)} columns from '{uploaded_file.name}' ({file_size_mb:.1f} MB)")
     with st.expander("🔍 Preview uploaded data", expanded=False):
-        st.dataframe(df.head(10), use_container_width=True)
+        st.dataframe(df.head(10), width='stretch')
         
         # Show column info
         col_info = []
@@ -375,7 +375,7 @@ def render_upload_widget() -> Optional[UploadOutcome]:
                 }
                 for record in records[:5]
             ])
-            st.dataframe(preview_df, use_container_width=True)
+            st.dataframe(preview_df, width='stretch')
             if len(records) > 5:
                 st.caption(f"Showing first 5 of {len(records)} companies...")
     else:

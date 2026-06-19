@@ -417,7 +417,7 @@ def render_login_page() -> bool:
         submit_button = st.form_submit_button(
             "🚀 Authenticate & Enter Platform", 
             type="primary",
-            use_container_width=True
+            width='stretch'
         )
         
         if submit_button:
@@ -553,13 +553,13 @@ def render_session_info():
         st.sidebar.write(f"**Time Remaining:** {int(hours)}h {int(minutes)}m")
         
         # Add logout button
-        if st.sidebar.button("🚪 Logout", use_container_width=True):
+        if st.sidebar.button("🚪 Logout", width='stretch'):
             session_manager.logout()
             st.rerun()
         
         # Add extend session button if less than 1 hour remaining
         if time_remaining.total_seconds() < 3600:  # Less than 1 hour
-            if st.sidebar.button("⏰ Extend Session", use_container_width=True):
+            if st.sidebar.button("⏰ Extend Session", width='stretch'):
                 if session_manager.extend_session():
                     st.sidebar.success("Session extended!")
                     st.rerun()
