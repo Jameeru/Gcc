@@ -174,12 +174,14 @@ class TestResearchCompanySuccess:
             with pytest.raises(GeminiResponseError):
                 engine.research_company("Acme", "acme.com")
 
-        # Bad JSON came back successfully from BOTH the grounded call and its
-        # fallback (same mock serves both) -- the retry loop only catches
-        # API-level failures, so the outer exponential-backoff loop shouldn't
-        # have retried this. Two calls (grounded + fallback) is the most that
-        # should happen for a single attempt.
-        assert mock_client.models.generate_content.call_count == 2
+        # The grounded call returned non-empty text successfully (just not
+        # valid JSON) -- _call_gemini_with_key only falls back to the
+        # no-search call when the grounded call raises or returns EMPTY
+        # text, not when it returns malformed-but-present text. Parsing
+        # failure surfaces only after the single grounded call completes,
+        # and the outer retry loop only catches API-level failures, so
+        # this should not have retried or fallen back.
+        assert mock_client.models.generate_content.call_count == 1
 
 
 class TestGroundedSearchFallback:

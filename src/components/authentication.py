@@ -308,7 +308,7 @@ class SessionManager:
 
 def render_login_page() -> bool:
     """
-    Render a compact, centered, enterprise-styled login page.
+    Render a compact, centered, enterprise-styled login page with forgot password functionality.
 
     Earlier versions tried to constrain the form's width with a hand-rolled
     ``<div class="login-container" style="max-width:500px">`` wrapper opened
@@ -331,6 +331,7 @@ def render_login_page() -> bool:
         True if authentication successful, False otherwise.
     """
     from ..utils.theme import clean_html
+    from .password_reset import EnhancedInputValidator
 
     st.markdown("<div class='gcc-login-wrap'>", unsafe_allow_html=True)
 
@@ -350,6 +351,12 @@ def render_login_page() -> bool:
             unsafe_allow_html=True,
         )
 
+        # Check for password reset completion message
+        if "reset_success" in st.query_params:
+            st.success("✅ Password reset successfully! Please sign in with your new password.")
+            # Clear the query parameter
+            del st.query_params["reset_success"]
+
         result_holder = {"authenticated": False}
 
         with st.form("login_form", clear_on_submit=True):
@@ -366,8 +373,11 @@ def render_login_page() -> bool:
             )
 
             if submit_button:
-                if not passcode or not passcode.strip():
-                    st.error("🚫 Please enter your passcode.")
+                # Enhanced validation with required field checking
+                validation = EnhancedInputValidator.validate_passcode_input(passcode)
+                
+                if not validation["valid"]:
+                    st.error(f"🚫 {validation['error']}")
                 else:
                     session_manager = SessionManager()
                     with st.spinner("Verifying credentials…"):
@@ -387,6 +397,13 @@ def render_login_page() -> bool:
                                 "⚠️ A system error occurred. Please try again "
                                 "in a moment."
                             )
+
+        # Forgot password link
+        st.markdown("<div style='text-align: center; margin-top: 15px;'>", unsafe_allow_html=True)
+        if st.button("🔑 Forgot Password?", key="forgot_password_link", help="Reset your password via email"):
+            st.session_state["show_reset_form"] = True
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown(
             clean_html(
@@ -422,6 +439,24 @@ def require_authentication():
     This function should be called at the beginning of protected pages
     to ensure users are authenticated before accessing functionality.
     """
+    # Handle password reset workflow first
+    if "reset_token" in st.query_params:
+        reset_token = st.query_params["reset_token"]
+        if handle_password_reset_completion(reset_token):
+            # If reset was successful, clear token and redirect to login
+            del st.query_params["reset_token"]
+            st.query_params["reset_success"] = "true"
+            st.rerun()
+        return None
+    
+    # Check if showing reset form
+    if st.session_state.get("show_reset_form", False):
+        if render_password_reset_form():
+            # Reset completed, redirect to login
+            st.session_state["show_reset_form"] = False
+            st.rerun()
+        return None
+    
     session_manager = SessionManager()
     
     if not session_manager.is_authenticated():
@@ -546,3 +581,181 @@ if __name__ == "__main__":
                 print("❌ Failed to create user")
         else:
             print("Usage: python authentication.py create_user <passcode>")
+
+
+def render_password_reset_form() -> bool:
+    """
+    Render password reset request form.
+    
+    Returns:
+        True if reset process completed successfully, False otherwise
+    """
+    from ..utils.theme import clean_html
+    from .password_reset import PasswordResetSystem, EnhancedInputValidator
+
+    st.markdown("<div class='gcc-login-wrap'>", unsafe_allow_html=True)
+    
+    _, col_mid, _ = st.columns([1, 1.1, 1])
+    
+    with col_mid:
+        st.markdown(
+            clean_html(
+                """
+                <div class="gcc-login-logo">🔑</div>
+                <div class="gcc-login-title">Reset Your Password</div>
+                <div class="gcc-login-subtitle">Enter your User ID to receive reset instructions</div>
+                """
+            ),
+            unsafe_allow_html=True,
+        )
+
+        with st.form("reset_form", clear_on_submit=True):
+            user_id = st.text_input(
+                "User ID",
+                placeholder="Enter your User ID (e.g., 1, 2, 3...)",
+                help="Your numeric User ID shown in the sidebar when logged in",
+                label_visibility="visible"
+            )
+            
+            submit_button = st.form_submit_button(
+                "Send Reset Email", type="primary", width='stretch'
+            )
+            
+            if submit_button:
+                # Validate input
+                validation = EnhancedInputValidator.validate_reset_identifier(user_id)
+                
+                if not validation["valid"]:
+                    st.error(f"🚫 {validation['error']}")
+                else:
+                    reset_system = PasswordResetSystem()
+                    with st.spinner("Processing reset request..."):
+                        result = reset_system.initiate_reset(user_id.strip())
+                        
+                        if result.success:
+                            st.success(result.message)
+                            if result.error_code != "RATE_LIMITED":
+                                st.info("📧 If your User ID exists, you'll receive reset instructions. Check the console logs for the reset link (since email is not configured).")
+                        else:
+                            if result.error_code == "RATE_LIMITED":
+                                st.warning(result.message)
+                            else:
+                                st.error(result.message)
+
+        # Back to login button
+        st.markdown("<div style='text-align: center; margin-top: 20px;'>", unsafe_allow_html=True)
+        if st.button("← Back to Sign In", key="back_to_login"):
+            st.session_state["show_reset_form"] = False
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+    
+    st.markdown("</div>", unsafe_allow_html=True)
+    
+    return False
+
+
+def handle_password_reset_completion(token: str) -> bool:
+    """
+    Handle password reset completion workflow.
+    
+    Args:
+        token: Reset token from URL parameter
+        
+    Returns:
+        True if password was successfully reset, False otherwise
+    """
+    from ..utils.theme import clean_html
+    from .password_reset import PasswordResetSystem
+
+    reset_system = PasswordResetSystem()
+    
+    # Validate token first
+    token_validation = reset_system.validate_token(token)
+    
+    if not token_validation["valid"]:
+        st.error(f"❌ {token_validation['error']}")
+        st.markdown("<div style='text-align: center; margin-top: 20px;'>", unsafe_allow_html=True)
+        if st.button("Request New Reset", key="request_new_reset"):
+            st.session_state["show_reset_form"] = True
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+        return False
+    
+    # Show password reset form
+    st.markdown("<div class='gcc-login-wrap'>", unsafe_allow_html=True)
+    
+    _, col_mid, _ = st.columns([1, 1.1, 1])
+    
+    with col_mid:
+        st.markdown(
+            clean_html(
+                """
+                <div class="gcc-login-logo">🔐</div>
+                <div class="gcc-login-title">Set New Password</div>
+                <div class="gcc-login-subtitle">Choose a strong password for your account</div>
+                """
+            ),
+            unsafe_allow_html=True,
+        )
+
+        with st.form("new_password_form", clear_on_submit=True):
+            new_password = st.text_input(
+                "New Password",
+                type="password",
+                placeholder="Enter new password",
+                help="Must be at least 8 characters with uppercase, lowercase, number, and special character",
+                label_visibility="visible"
+            )
+            
+            confirm_password = st.text_input(
+                "Confirm Password",
+                type="password",
+                placeholder="Re-enter new password",
+                label_visibility="visible"
+            )
+            
+            submit_button = st.form_submit_button(
+                "Update Password", type="primary", width='stretch'
+            )
+            
+            if submit_button:
+                if not new_password:
+                    st.error("🚫 New password is required")
+                elif not confirm_password:
+                    st.error("🚫 Please confirm your new password")
+                elif new_password != confirm_password:
+                    st.error("🚫 Passwords do not match")
+                else:
+                    with st.spinner("Updating password..."):
+                        result = reset_system.reset_password(token, new_password)
+                        
+                        if result.success:
+                            st.success(result.message)
+                            time.sleep(1)
+                            return True
+                        else:
+                            st.error(result.message)
+
+        # Show password requirements
+        st.markdown(
+            clean_html(
+                """
+                <div style='background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-top: 15px; font-size: 14px;'>
+                    <strong>Password Requirements:</strong>
+                    <ul style='margin: 8px 0; padding-left: 20px;'>
+                        <li>At least 8 characters long</li>
+                        <li>At least one uppercase letter (A-Z)</li>
+                        <li>At least one lowercase letter (a-z)</li>
+                        <li>At least one number (0-9)</li>
+                        <li>At least one special character (!@#$%^&*())</li>
+                        <li>Cannot be the same as your current password</li>
+                    </ul>
+                </div>
+                """
+            ),
+            unsafe_allow_html=True,
+        )
+    
+    st.markdown("</div>", unsafe_allow_html=True)
+    
+    return False

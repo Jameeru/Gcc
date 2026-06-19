@@ -738,10 +738,15 @@ class TestResearchResponseValidationProperties:
 
         result = self.engine._parse_and_validate(json_response, company_name, domain)
 
+        # A blank/whitespace-only pain_points string is normalized to the
+        # "no specific signals found" placeholder by parse_research_response
+        # before the no-signals-vs-list-item branch is evaluated.
+        normalized = (pain_points_value or "").strip() or "no specific signals found"
+
         assert isinstance(result.business_pain_points, list)
-        if pain_points_value.strip().lower() == "no specific signals found":
+        if normalized.lower() == "no specific signals found":
             assert result.business_pain_points == []
         else:
-            assert result.business_pain_points == [pain_points_value]
-        assert result.pain_points_summary == pain_points_value
-        assert result.research_summary == pain_points_value
+            assert result.business_pain_points == [normalized]
+        assert result.pain_points_summary == normalized
+        assert result.research_summary == normalized
