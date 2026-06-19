@@ -5,11 +5,37 @@ Centralizes the CSS injected into every page so the sidebar navigation,
 KPI cards, and page headers share one consistent, polished look instead of
 relying on Streamlit's default styling. Pure presentation -- no business
 logic lives here.
+
+This module exports: inject_enterprise_theme, clean_html, render_page_header,
+kpi_card, pill, and color constants.
 """
 
 from __future__ import annotations
 
 import streamlit as st
+
+# Explicitly export all public functions and constants
+__all__ = [
+    'inject_enterprise_theme',
+    'clean_html', 
+    'render_page_header',
+    'kpi_card',
+    'pill',
+    'NAVY',
+    'SLATE_900',
+    'SLATE_800', 
+    'SLATE_700',
+    'SLATE_500',
+    'SLATE_300',
+    'SLATE_100',
+    'SLATE_50',
+    'ACCENT_BLUE',
+    'ACCENT_BLUE_DARK',
+    'ACCENT_GREEN',
+    'ACCENT_AMBER',
+    'ACCENT_RED',
+    'WHITE',
+]
 
 # Core palette. Kept as module-level constants (rather than buried in the
 # CSS string) so other components can reuse the same colors for inline
