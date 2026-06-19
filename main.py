@@ -38,7 +38,7 @@ from src.utils.api_keys import get_gemini_api_keys, is_configured
 from src.utils.api_keys import OPENAI_API_KEY as OPENAI_API_KEY_SETTING
 from src.utils.config import get_config
 from src.utils.logging import get_logger, log_event
-from src.utils.theme import inject_enterprise_theme, kpi_card, pill, render_page_header
+from src.utils.theme import ACCENT_RED, clean_html, inject_enterprise_theme, kpi_card, pill, render_page_header
 
 logger = get_logger("main")
 
@@ -263,36 +263,50 @@ def render_dashboard_page(session_manager):
         session_status = session_manager.get_session_status()
         session_pill = pill("Active", "green") if session_status["authenticated"] else pill("Inactive", "red")
 
+        db_error_row = ""
+        if db_health.get("status") != "healthy" and db_health.get("error"):
+            db_error_row = f"""
+                <div class="gcc-status-row">
+                    <span class="gcc-status-label">DB Error Detail</span>
+                    <span class="gcc-status-value" style="color:{ACCENT_RED};font-weight:600;font-size:0.78rem;">
+                        {db_health.get('error')}
+                    </span>
+                </div>
+            """
+
         st.markdown(
-            f"""
-            <div class="gcc-card">
-                <div class="gcc-card-title">🩺 System Health</div>
-                <div class="gcc-status-row">
-                    <span class="gcc-status-label">Database</span>
-                    <span class="gcc-status-value">{db_pill}</span>
+            clean_html(
+                f"""
+                <div class="gcc-card">
+                    <div class="gcc-card-title">🩺 System Health</div>
+                    <div class="gcc-status-row">
+                        <span class="gcc-status-label">Database</span>
+                        <span class="gcc-status-value">{db_pill}</span>
+                    </div>
+                    <div class="gcc-status-row">
+                        <span class="gcc-status-label">DB Host</span>
+                        <span class="gcc-status-value">{db_health.get('database_url_host', 'N/A')}</span>
+                    </div>
+                    {db_error_row}
+                    <div class="gcc-status-row">
+                        <span class="gcc-status-label">OpenAI Provider</span>
+                        <span class="gcc-status-value">{openai_pill}</span>
+                    </div>
+                    <div class="gcc-status-row">
+                        <span class="gcc-status-label">Gemini Provider</span>
+                        <span class="gcc-status-value">{gemini_pill}</span>
+                    </div>
+                    <div class="gcc-status-row">
+                        <span class="gcc-status-label">Your Session</span>
+                        <span class="gcc-status-value">{session_pill}</span>
+                    </div>
+                    <div class="gcc-status-row">
+                        <span class="gcc-status-label">Session Time Remaining</span>
+                        <span class="gcc-status-value">{session_status.get('time_remaining', 'N/A')}</span>
+                    </div>
                 </div>
-                <div class="gcc-status-row">
-                    <span class="gcc-status-label">DB Host</span>
-                    <span class="gcc-status-value">{db_health.get('database_url_host', 'N/A')}</span>
-                </div>
-                <div class="gcc-status-row">
-                    <span class="gcc-status-label">OpenAI Provider</span>
-                    <span class="gcc-status-value">{openai_pill}</span>
-                </div>
-                <div class="gcc-status-row">
-                    <span class="gcc-status-label">Gemini Provider</span>
-                    <span class="gcc-status-value">{gemini_pill}</span>
-                </div>
-                <div class="gcc-status-row">
-                    <span class="gcc-status-label">Your Session</span>
-                    <span class="gcc-status-value">{session_pill}</span>
-                </div>
-                <div class="gcc-status-row">
-                    <span class="gcc-status-label">Session Time Remaining</span>
-                    <span class="gcc-status-value">{session_status.get('time_remaining', 'N/A')}</span>
-                </div>
-            </div>
-            """,
+                """
+            ),
             unsafe_allow_html=True,
         )
 
@@ -301,30 +315,37 @@ def render_dashboard_page(session_manager):
             st.json(config.get_config_summary())
 
     with col_right:
-        rows_html = ""
         if not recent_sessions:
             rows_html = (
                 '<div class="gcc-status-row"><span class="gcc-status-label">'
                 "No processing sessions yet — upload a CSV to get started.</span></div>"
             )
         else:
+            row_parts = []
             for sess in recent_sessions:
-                rows_html += f"""
-                <div class="gcc-status-row">
-                    <span class="gcc-status-label">{sess.session_id[:10]}…</span>
-                    <span class="gcc-status-value">
-                        {sess.processed_companies}/{sess.total_companies} · {_status_pill(sess.status)}
-                    </span>
-                </div>
-                """
+                row_parts.append(
+                    clean_html(
+                        f"""
+                        <div class="gcc-status-row">
+                            <span class="gcc-status-label">{sess.session_id[:10]}…</span>
+                            <span class="gcc-status-value">
+                                {sess.processed_companies}/{sess.total_companies} · {_status_pill(sess.status)}
+                            </span>
+                        </div>
+                        """
+                    )
+                )
+            rows_html = "\n".join(row_parts)
 
         st.markdown(
-            f"""
-            <div class="gcc-card">
-                <div class="gcc-card-title">🕒 Recent Processing Activity</div>
-                {rows_html}
-            </div>
-            """,
+            clean_html(
+                f"""
+                <div class="gcc-card">
+                    <div class="gcc-card-title">🕒 Recent Processing Activity</div>
+                    {rows_html}
+                </div>
+                """
+            ),
             unsafe_allow_html=True,
         )
 

@@ -596,7 +596,7 @@ class TestErrorMessageDisplay:
              patch('streamlit.form_submit_button', return_value=True), \
              patch('streamlit.error') as mock_error, \
              patch('streamlit.markdown'), \
-             patch('streamlit.columns', return_value=[Mock(), Mock()]):
+             patch('streamlit.columns', return_value=[MagicMock(), MagicMock(), MagicMock()]):
             
             # Mock form context manager
             mock_form.return_value.__enter__ = Mock()
@@ -628,7 +628,7 @@ class TestErrorMessageDisplay:
                  patch('streamlit.form_submit_button', return_value=True), \
                  patch('streamlit.error') as mock_error, \
                  patch('streamlit.markdown'), \
-                 patch('streamlit.columns', return_value=[Mock(), Mock()]):
+                 patch('streamlit.columns', return_value=[MagicMock(), MagicMock(), MagicMock()]):
                 
                 # Mock form context manager
                 mock_form.return_value.__enter__ = Mock()
@@ -653,7 +653,7 @@ class TestErrorMessageDisplay:
              patch('streamlit.error') as mock_error, \
              patch('streamlit.spinner') as mock_spinner, \
              patch('streamlit.markdown'), \
-             patch('streamlit.columns', return_value=[Mock(), Mock()]), \
+             patch('streamlit.columns', return_value=[MagicMock(), MagicMock(), MagicMock()]), \
              patch('src.components.authentication.SessionManager') as mock_session_manager:
             
             # Mock form context manager
@@ -693,7 +693,7 @@ class TestErrorMessageDisplay:
              patch('streamlit.error') as mock_error, \
              patch('streamlit.spinner') as mock_spinner, \
              patch('streamlit.markdown'), \
-             patch('streamlit.columns', return_value=[Mock(), Mock()]), \
+             patch('streamlit.columns', return_value=[MagicMock(), MagicMock(), MagicMock()]), \
              patch('src.components.authentication.SessionManager') as mock_session_manager:
             
             # Mock form and spinner context managers
@@ -732,7 +732,7 @@ class TestErrorMessageDisplay:
              patch('streamlit.spinner') as mock_spinner, \
              patch('streamlit.rerun') as mock_rerun, \
              patch('streamlit.markdown'), \
-             patch('streamlit.columns', return_value=[Mock(), Mock()]), \
+             patch('streamlit.columns', return_value=[MagicMock(), MagicMock(), MagicMock()]), \
              patch('src.components.authentication.SessionManager') as mock_session_manager, \
              patch('time.sleep'):  # Mock the sleep delay
             
@@ -756,7 +756,7 @@ class TestErrorMessageDisplay:
             
             # Check that success message mentions successful authentication
             success_messages = [str(call) for call in success_calls]
-            assert any("Authentication Successful" in msg or "Welcome" in msg for msg in success_messages)
+            assert any("Authenticated" in msg or "Welcome" in msg for msg in success_messages)
             
             # Verify rerun was called to refresh the page
             mock_rerun.assert_called()
@@ -771,7 +771,7 @@ class TestErrorMessageDisplay:
              patch('streamlit.spinner') as mock_spinner, \
              patch('streamlit.error'), \
              patch('streamlit.markdown'), \
-             patch('streamlit.columns', return_value=[Mock(), Mock()]), \
+             patch('streamlit.columns', return_value=[MagicMock(), MagicMock(), MagicMock()]), \
              patch('src.components.authentication.SessionManager') as mock_session_manager:
             
             # Mock form context manager

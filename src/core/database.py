@@ -6,8 +6,9 @@ session management for Supabase PostgreSQL integration.
 """
 
 import os
+import time
 from contextlib import contextmanager
-from typing import Generator, Optional
+from typing import Generator, Optional, Tuple
 from urllib.parse import urlparse, quote_plus
 
 from sqlalchemy import create_engine, text, Engine
@@ -187,12 +188,43 @@ class DatabaseManager:
         Returns:
             True if connection successful, False otherwise.
         """
-        try:
-            with self.get_session() as session:
-                session.execute(text("SELECT 1"))
-            return True
-        except Exception:
-            return False
+        connected, _ = self.test_connection_verbose()
+        return connected
+
+    def test_connection_verbose(self, retries: int = 1, retry_delay: float = 0.4) -> Tuple[bool, Optional[str]]:
+        """
+        Test the database connection, retrying once on failure before giving
+        up, and returning the underlying error message on failure.
+
+        A single SELECT 1 failing on Streamlit Cloud is often a transient
+        blip (e.g. a recycled/cold pooled connection, a brief network hiccup)
+        rather than a real outage -- especially since other queries against
+        the same `db_manager` can succeed moments later in the same render.
+        Retrying once before reporting "ERROR" avoids flashing a false
+        outage on the dashboard for those transient cases, and returning the
+        actual exception text lets a *genuine* outage be diagnosed from the
+        UI itself instead of being silently swallowed.
+
+        Args:
+            retries: number of retry attempts after the first failed try.
+            retry_delay: seconds to wait between attempts.
+
+        Returns:
+            (True, None) on success, or (False, "<error message>") if every
+            attempt failed.
+        """
+        last_error: Optional[str] = None
+        attempts = max(1, retries + 1)
+        for attempt in range(attempts):
+            try:
+                with self.get_session() as session:
+                    session.execute(text("SELECT 1"))
+                return True, None
+            except Exception as exc:  # noqa: BLE001
+                last_error = str(exc)
+                if attempt < attempts - 1:
+                    time.sleep(retry_delay)
+        return False, last_error
 
 
 class _LazyDatabaseManager:
@@ -263,25 +295,42 @@ def init_database() -> None:
 def check_database_health() -> dict:
     """
     Check database connection health and return status information.
-    
+
+    Retries the connectivity probe once internally (see
+    `DatabaseManager.test_connection_verbose`) before reporting failure, and
+    always tries to include `database_url_host` -- even on failure -- so the
+    dashboard isn't left showing "N/A" for a host it actually does know.
+    The raw error message (if any) is included as `error` so a genuine
+    outage can be diagnosed straight from the UI.
+
     Returns:
         Dictionary with database health status and connection info.
     """
+    # Resolve the configured host defensively and independently of the
+    # connectivity probe below, so it's still reported even if the probe
+    # itself blows up before reaching the return statement.
     try:
-        is_connected = db_manager.test_connection()
+        host = urlparse(db_manager.config.database_url).hostname
+    except Exception:
+        host = None
+
+    try:
+        is_connected, error = db_manager.test_connection_verbose()
         engine = db_manager.engine
-        
+
         return {
             "status": "healthy" if is_connected else "unhealthy",
             "connected": is_connected,
             "pool_size": engine.pool.size() if hasattr(engine.pool, 'size') else None,
             "checked_in": engine.pool.checkedin() if hasattr(engine.pool, 'checkedin') else None,
             "checked_out": engine.pool.checkedout() if hasattr(engine.pool, 'checkedout') else None,
-            "database_url_host": urlparse(db_manager.config.database_url).hostname
+            "database_url_host": host,
+            "error": error,
         }
     except Exception as e:
         return {
             "status": "error",
             "connected": False,
-            "error": str(e)
+            "database_url_host": host,
+            "error": str(e),
         }

@@ -281,6 +281,80 @@ _THEME_CSS = f"""
     .stButton button[kind="primary"]:hover {{
         background: {ACCENT_BLUE_DARK};
     }}
+
+    /* ---------- Login page ---------- */
+    .gcc-login-wrap {{
+        padding-top: 4vh;
+    }}
+    .gcc-login-logo {{
+        width: 56px;
+        height: 56px;
+        border-radius: 14px;
+        background: linear-gradient(135deg, {ACCENT_BLUE} 0%, {ACCENT_BLUE_DARK} 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.7rem;
+        margin: 0 auto 1rem auto;
+        box-shadow: 0 8px 16px rgba(37,99,235,0.25);
+    }}
+    .gcc-login-title {{
+        text-align: center;
+        font-size: 1.45rem;
+        font-weight: 750;
+        color: {SLATE_900};
+        margin-bottom: 0.2rem;
+    }}
+    .gcc-login-subtitle {{
+        text-align: center;
+        font-size: 0.85rem;
+        color: {SLATE_500};
+        margin-bottom: 1.5rem;
+    }}
+    /* Targets Streamlit's own generated form container directly (rather
+       than a custom wrapper div) -- a div opened via st.markdown can never
+       visually contain widgets from a later, separate st.form(...) call, so
+       this rule intentionally is NOT scoped under a custom wrapper class.
+       Centering/narrowing the login form itself is instead handled by
+       rendering it inside a real st.columns(...) slot in authentication.py,
+       which IS a genuine nesting container. */
+    [data-testid="stForm"] {{
+        background: {WHITE};
+        border: 1px solid {SLATE_300};
+        border-radius: 16px;
+        padding: 1.75rem 1.75rem 1.25rem 1.75rem;
+        box-shadow: 0 8px 24px rgba(15,23,42,0.08);
+    }}
+    [data-testid="stForm"] label p {{
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: {SLATE_700};
+    }}
+    [data-testid="stForm"] input {{
+        border-radius: 8px;
+    }}
+    .gcc-login-footnote {{
+        text-align: center;
+        font-size: 0.75rem;
+        color: {SLATE_500};
+        margin-top: 1rem;
+    }}
+    .gcc-login-chip-row {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        justify-content: center;
+        margin-top: 1.1rem;
+    }}
+    .gcc-login-chip {{
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: {SLATE_700};
+        background: {SLATE_100};
+        border: 1px solid {SLATE_300};
+        border-radius: 999px;
+        padding: 0.25rem 0.65rem;
+    }}
 </style>
 """
 
@@ -290,18 +364,42 @@ def inject_enterprise_theme() -> None:
     st.markdown(_THEME_CSS, unsafe_allow_html=True)
 
 
+def clean_html(html: str) -> str:
+    """
+    Normalize a multi-line HTML snippet before passing it to
+    ``st.markdown(..., unsafe_allow_html=True)``.
+
+    Triple-quoted f-strings built inside indented Python code carry that
+    indentation into the literal string. Streamlit's markdown renderer
+    follows CommonMark's rules, where 4+ leading spaces on a line start an
+    *indented code block* instead of raw HTML -- and concatenating several
+    such indented strings (e.g. building a list of rows in a loop) also
+    introduces whitespace-only "blank" lines between them, which closes
+    whatever HTML block was open and restarts parsing from scratch on the
+    next (still-indented) line. Both together cause perfectly valid HTML to
+    render as literal escaped text instead of real markup. Stripping each
+    line's leading/trailing whitespace and dropping now-empty lines keeps
+    the whole snippet as one contiguous HTML block regardless of how it was
+    assembled in Python.
+    """
+    lines = [line.strip() for line in html.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
 def render_page_header(title: str, subtitle: str = "") -> None:
     """Render the standard enterprise page header (title + subtitle + rule)."""
     subtitle_html = f'<div class="gcc-page-subtitle">{subtitle}</div>' if subtitle else ""
     st.markdown(
-        f"""
-        <div class="gcc-page-header">
-            <div>
-                <p class="gcc-page-title">{title}</p>
-                {subtitle_html}
+        clean_html(
+            f"""
+            <div class="gcc-page-header">
+                <div>
+                    <p class="gcc-page-title">{title}</p>
+                    {subtitle_html}
+                </div>
             </div>
-        </div>
-        """,
+            """
+        ),
         unsafe_allow_html=True,
     )
 
@@ -327,16 +425,18 @@ def kpi_card(column, label: str, value: str, icon: str = "", delta: str = "", de
 
     with column:
         st.markdown(
-            f"""
-            <div class="gcc-kpi-card">
-                <div class="gcc-kpi-top">
-                    <span class="gcc-kpi-label">{label}</span>
-                    {icon_html}
+            clean_html(
+                f"""
+                <div class="gcc-kpi-card">
+                    <div class="gcc-kpi-top">
+                        <span class="gcc-kpi-label">{label}</span>
+                        {icon_html}
+                    </div>
+                    <div class="gcc-kpi-value">{value}</div>
+                    {delta_html}
                 </div>
-                <div class="gcc-kpi-value">{value}</div>
-                {delta_html}
-            </div>
-            """,
+                """
+            ),
             unsafe_allow_html=True,
         )
 

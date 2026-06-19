@@ -136,45 +136,53 @@ class TestLoginUIComponent:
             mock_error.assert_called()
     
     def test_enhanced_styling_elements_present(self):
-        """Test that enhanced styling elements are present in the code."""
+        """Test that enterprise styling elements are present in the code.
+
+        The login page was redesigned to a compact, centered card (per an
+        explicit "make it enterprise level, not lengthy" request): CSS class
+        names moved from ad-hoc `login-*` classes defined inline to the
+        shared `gcc-login-*` classes in `src/utils/theme.py`, and width is
+        now constrained via a real `st.columns(...)` layout rather than a
+        non-functional custom `<div>` wrapper.
+        """
         from src.components.authentication import render_login_page
-        
+
         import inspect
         source = inspect.getsource(render_login_page)
-        
-        # Check for key CSS styling elements
+
+        # Check for key styling/layout elements of the new design
         styling_elements = [
-            'login-container',
-            'login-header',
-            'login-title', 
-            'platform-info',
-            '<style>',
-            'CSS'
+            'gcc-login-wrap',
+            'gcc-login-logo',
+            'gcc-login-title',
+            'gcc-login-chip-row',
+            'st.columns',
+            'clean_html',
         ]
-        
+
         found_elements = [elem for elem in styling_elements if elem in source]
-        
+
         # Should have most styling elements
         assert len(found_elements) >= 4, \
             f"Should have at least 4 styling elements, found: {found_elements}"
     
     def test_error_message_handling_present(self):
-        """Test that enhanced error message handling is present."""
+        """Test that error message handling is present."""
         from src.components.authentication import render_login_page
-        
+
         import inspect
         source = inspect.getsource(render_login_page)
-        
-        # Check for enhanced error messages
+
+        # Check for clear, distinct error messages covering each failure mode
         error_elements = [
-            'Authentication Failed',
-            'Invalid Input',
-            'System Error',
-            'st.error'
+            'Please enter your passcode',
+            'Incorrect passcode',
+            'system error',
+            'st.error',
         ]
-        
+
         found_errors = [elem for elem in error_elements if elem in source]
-        
+
         # Should have comprehensive error handling
         assert len(found_errors) >= 3, \
             f"Should have comprehensive error handling, found: {found_errors}"
@@ -182,114 +190,117 @@ class TestLoginUIComponent:
     def test_user_feedback_mechanisms_present(self):
         """Test that user feedback mechanisms are implemented."""
         from src.components.authentication import render_login_page
-        
+
         import inspect
         source = inspect.getsource(render_login_page)
-        
+
         # Check for user feedback elements
         feedback_elements = [
             'st.spinner',
-            'Authenticating',
+            'Verifying credentials',
             'st.success',
-            'Authentication Successful',
-            'loading'
+            'Authenticated',
+            'time.sleep',
         ]
-        
+
         found_feedback = [elem for elem in feedback_elements if elem in source]
-        
+
         # Should have user feedback mechanisms
         assert len(found_feedback) >= 3, \
             f"Should have user feedback mechanisms, found: {found_feedback}"
     
     def test_professional_styling_css_structure(self):
-        """Test that professional CSS styling structure is implemented."""
-        from src.components.authentication import render_login_page
-        
+        """Test that the login page's CSS is centrally themed.
+
+        Styling now lives in the shared `src/utils/theme.py` module (one
+        `<style>` block reused by every page, including
+        `[data-testid="stForm"]` rules that style the login card, the
+        sidebar, KPI cards, etc.) rather than being redefined inline inside
+        `render_login_page` itself -- that centralization is the whole
+        point of the enterprise theme module.
+        """
+        from src.utils import theme
         import inspect
-        source = inspect.getsource(render_login_page)
-        
-        # Check for professional CSS elements
+
+        css_source = inspect.getsource(theme)
+
         css_elements = [
-            'background: linear-gradient',
+            'gcc-login-logo',
             'border-radius',
             'box-shadow',
             'color:',
             'font-size',
             'margin',
-            'padding'
+            'padding',
         ]
-        
-        found_css = [elem for elem in css_elements if elem in source]
-        
-        # Should have professional CSS styling
+
+        found_css = [elem for elem in css_elements if elem in css_source]
+
         assert len(found_css) >= 5, \
             f"Should have professional CSS styling, found: {found_css}"
     
     def test_help_information_section_present(self):
-        """Test that help information section is present."""
+        """Test that help/capability information is present.
+
+        The old wide two-column "Platform Capabilities" / "Need Access?"
+        boxes were replaced with a compact chip row plus a one-line
+        footnote, per the explicit "not lengthy" redesign request -- the
+        same information is conveyed far more compactly.
+        """
         from src.components.authentication import render_login_page
-        
+
         import inspect
         source = inspect.getsource(render_login_page)
-        
-        # Check for help and information elements
+
         help_elements = [
-            'Platform Capabilities',
-            'Need Access',
+            'CSV Upload',
+            'AI-Powered Research',
             'system administrator',
-            'platform-info',
-            'help-text'
+            'gcc-login-chip',
+            'gcc-login-footnote',
         ]
-        
+
         found_help = [elem for elem in help_elements if elem in source]
-        
-        # Should have help information
+
         assert len(found_help) >= 3, \
             f"Should have help information section, found: {found_help}"
     
     def test_security_note_present(self):
         """Test that security and privacy information is present."""
         from src.components.authentication import render_login_page
-        
+
         import inspect
         source = inspect.getsource(render_login_page)
-        
-        # Check for security elements
+
+        # Check for security elements (case-insensitive: wording was
+        # condensed into a single footnote line during the redesign)
         security_elements = [
-            'security',
             'encrypted',
-            'protected',
-            'sessions expire',
-            '24 hours'
+            'expire',
+            '24h',
+            'administrator',
         ]
-        
-        found_security = [elem for elem in security_elements if elem in source]
-        
+
+        found_security = [elem for elem in security_elements if elem in source.lower()]
+
         # Should have security information
         assert len(found_security) >= 3, \
             f"Should have security information, found: {found_security}"
     
-    @patch('streamlit.markdown')
-    def test_custom_css_injection(self, mock_markdown):
-        """Test that custom CSS is properly injected."""
-        from src.components.authentication import render_login_page
-        
-        # Mock form and input elements to avoid errors
-        with patch('streamlit.form'), \
-             patch('streamlit.text_input'), \
-             patch('streamlit.form_submit_button'):
-            
-            try:
-                render_login_page()
-            except:
-                # Expect errors due to mocking, but CSS should still be called
-                pass
-            
-            # Check that markdown was called with CSS
-            css_calls = [call for call in mock_markdown.call_args_list 
-                        if call[0] and '<style>' in str(call[0])]
-            
-            assert len(css_calls) > 0, "Should inject custom CSS via st.markdown"
+    def test_custom_css_injection(self):
+        """Test that the shared enterprise CSS theme covers the login page.
+
+        CSS injection was centralized: `main.py` calls
+        `inject_enterprise_theme()` once per page render (so every page,
+        login included, shares one `<style>` block) instead of each page
+        re-injecting its own ad-hoc `<style>` tag. Verify the shared theme
+        actually contains the `<style>` block and the login-specific rules.
+        """
+        from src.utils.theme import _THEME_CSS, inject_enterprise_theme
+
+        assert callable(inject_enterprise_theme), "inject_enterprise_theme should be callable"
+        assert '<style>' in _THEME_CSS, "Shared theme should inject CSS via a <style> block"
+        assert 'gcc-login' in _THEME_CSS, "Shared theme should include login page styling"
 
 
 class TestAuthenticationIntegration:
@@ -319,16 +330,16 @@ class TestAuthenticationIntegration:
         assert "Requirements 1.2, 1.3, 14.7" in docstring, \
             "Should validate Requirements 1.2, 1.3, 14.7"
         
-        # Check that docstring describes the UI enhancements
+        # Check that docstring describes the UI design (updated for the
+        # compact/centered enterprise redesign)
         expected_descriptions = [
-            "professional styling",
-            "error messaging", 
-            "user feedback"
+            "centered",
+            "enterprise",
+            "st.columns",
         ]
-        
-        for desc in expected_descriptions:
-            assert any(desc in docstring.lower() for desc in expected_descriptions), \
-                f"Docstring should describe UI enhancements"
+
+        assert any(desc in docstring.lower() for desc in expected_descriptions), \
+            "Docstring should describe the login page's UI design"
 
 
 if __name__ == "__main__":

@@ -308,208 +308,110 @@ class SessionManager:
 
 def render_login_page() -> bool:
     """
-    Render enhanced Streamlit login page interface with professional styling.
-    
-    This function creates a polished login interface with:
-    - Professional styling and layout
-    - Clear error messaging for invalid credentials  
-    - User feedback and loading states
-    - Helpful information about the platform
-    
+    Render a compact, centered, enterprise-styled login page.
+
+    Earlier versions tried to constrain the form's width with a hand-rolled
+    ``<div class="login-container" style="max-width:500px">`` wrapper opened
+    via ``st.markdown(...)``. That never actually worked: a raw HTML element
+    injected by one ``st.markdown`` call cannot visually contain widgets
+    rendered by a *later, separate* Streamlit call (``st.form``,
+    ``st.text_input``, ``st.form_submit_button``) -- each becomes an
+    independent full-width sibling in the real DOM regardless of the markup
+    around it. That's why the password field and submit button always
+    stretched the full page width no matter what CSS was added.
+
+    The fix is to use ``st.columns([...])`` instead, which IS a real layout
+    primitive: widgets rendered inside a column slot are genuinely nested
+    inside it, so a narrow center column actually constrains everything
+    placed in it -- logo, title, the form, and the footnote below.
+
     **Validates: Requirements 1.2, 1.3, 14.7**
-    
+
     Returns:
         True if authentication successful, False otherwise.
     """
-    # Custom CSS for enhanced styling
-    st.markdown("""
-    <style>
-        .login-container {
-            max-width: 500px;
-            margin: 2rem auto;
-            padding: 2rem;
-            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
-            border-radius: 12px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07), 0 1px 3px rgba(0, 0, 0, 0.1);
-            border: 1px solid #e2e8f0;
-        }
-        
-        .login-header {
-            text-align: center;
-            margin-bottom: 2rem;
-        }
-        
-        .login-title {
-            color: #1e293b;
-            font-size: 2rem;
-            font-weight: 600;
-            margin-bottom: 0.5rem;
-        }
-        
-        .login-subtitle {
-            color: #64748b;
-            font-size: 1.1rem;
-            font-weight: 400;
-        }
-        
-        .platform-info {
-            background: white;
-            padding: 1.5rem;
-            border-radius: 8px;
-            border-left: 4px solid #2563eb;
-            margin-top: 1.5rem;
-        }
-        
-        .feature-list {
-            margin: 1rem 0;
-        }
-        
-        .feature-item {
-            display: flex;
-            align-items: center;
-            margin: 0.5rem 0;
-            color: #475569;
-        }
-        
-        .help-text {
-            background: #fef3c7;
-            color: #92400e;
-            padding: 1rem;
-            border-radius: 8px;
-            border-left: 4px solid #f59e0b;
-            margin-top: 1rem;
-        }
-        
-        .security-note {
-            font-size: 0.875rem;
-            color: #6b7280;
-            text-align: center;
-            margin-top: 1rem;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    # Main container
-    st.markdown('<div class="login-container">', unsafe_allow_html=True)
-    
-    # Header section
-    st.markdown("""
-    <div class="login-header">
-        <div class="login-title">🏢 GCC Research Intelligence Platform</div>
-        <div class="login-subtitle">🔐 Secure Authentication Required</div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Login form with enhanced styling
-    with st.form("login_form", clear_on_submit=True):
-        st.markdown("**Enter your authorized passcode to access the platform:**")
-        
-        # Passcode input with enhanced validation feedback
-        passcode = st.text_input(
-            "Passcode",
-            type="password",
-            placeholder="Enter your passcode...",
-            help="🔒 Passcodes are case-sensitive and provided by your system administrator",
-            label_visibility="collapsed"
+    from ..utils.theme import clean_html
+
+    st.markdown("<div class='gcc-login-wrap'>", unsafe_allow_html=True)
+
+    # A real layout primitive: only content placed inside col_mid is
+    # actually narrowed to roughly 38% of the page width on desktop.
+    _, col_mid, _ = st.columns([1, 1.1, 1])
+
+    with col_mid:
+        st.markdown(
+            clean_html(
+                """
+                <div class="gcc-login-logo">🏢</div>
+                <div class="gcc-login-title">GCC Research Intelligence</div>
+                <div class="gcc-login-subtitle">Sign in with your passcode to continue</div>
+                """
+            ),
+            unsafe_allow_html=True,
         )
-        
-        # Enhanced submit button
-        submit_button = st.form_submit_button(
-            "🚀 Authenticate & Enter Platform", 
-            type="primary",
-            width='stretch'
+
+        result_holder = {"authenticated": False}
+
+        with st.form("login_form", clear_on_submit=True):
+            passcode = st.text_input(
+                "Passcode",
+                type="password",
+                placeholder="Enter passcode",
+                help="Case-sensitive. Provided by your system administrator.",
+                label_visibility="collapsed",
+            )
+
+            submit_button = st.form_submit_button(
+                "Sign In", type="primary", width='stretch'
+            )
+
+            if submit_button:
+                if not passcode or not passcode.strip():
+                    st.error("🚫 Please enter your passcode.")
+                else:
+                    session_manager = SessionManager()
+                    with st.spinner("Verifying credentials…"):
+                        try:
+                            if session_manager.authenticate_user(passcode):
+                                st.success("✅ Authenticated — redirecting…")
+                                time.sleep(0.4)
+                                result_holder["authenticated"] = True
+                            else:
+                                st.error(
+                                    "❌ Incorrect passcode. Check for typos or "
+                                    "caps lock, or contact your administrator."
+                                )
+                        except Exception as e:
+                            logger.error(f"Authentication error: {e}")
+                            st.error(
+                                "⚠️ A system error occurred. Please try again "
+                                "in a moment."
+                            )
+
+        st.markdown(
+            clean_html(
+                """
+                <div class="gcc-login-chip-row">
+                    <span class="gcc-login-chip">📊 CSV Upload</span>
+                    <span class="gcc-login-chip">🤖 AI-Powered Research</span>
+                    <span class="gcc-login-chip">📈 Suitability Scoring</span>
+                    <span class="gcc-login-chip">📤 Export</span>
+                </div>
+                <div class="gcc-login-footnote">
+                    🔒 Credentials are encrypted. Sessions expire after 24h of inactivity.
+                    <br>Need access? Contact your system administrator.
+                </div>
+                """
+            ),
+            unsafe_allow_html=True,
         )
-        
-        if submit_button:
-            # Input validation with specific error messages
-            if not passcode:
-                st.error("🚫 **Passcode Required**: Please enter your passcode to continue.")
-                return False
-            
-            if len(passcode.strip()) == 0:
-                st.error("🚫 **Invalid Input**: Passcode cannot be empty or contain only spaces.")
-                return False
-            
-            # Initialize session manager and attempt authentication
-            session_manager = SessionManager()
-            
-            # Enhanced loading state with progress indicator
-            with st.spinner("🔍 **Authenticating...** Verifying your credentials"):
-                try:
-                    if session_manager.authenticate_user(passcode):
-                        # Success feedback with professional messaging
-                        st.success("✅ **Authentication Successful!** Welcome to the platform. Redirecting...")
-                        
-                        # Small delay to show success message
-                        import time
-                        time.sleep(0.5)
-                        
-                        st.rerun()
-                        return True
-                    else:
-                        # Enhanced error messaging for authentication failure
-                        st.error("""
-                        ❌ **Authentication Failed**
-                        
-                        The passcode you entered is incorrect. Please:
-                        - Check your passcode for typos
-                        - Ensure caps lock is not enabled
-                        - Contact your administrator if you continue to have issues
-                        """)
-                        return False
-                        
-                except Exception as e:
-                    logger.error(f"Authentication error: {e}")
-                    st.error("""
-                    ⚠️ **System Error**
-                    
-                    An unexpected error occurred during authentication. 
-                    Please try again in a moment or contact your system administrator.
-                    """)
-                    return False
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Enhanced platform information section
-    st.markdown("---")
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        st.markdown("""
-        <div class="platform-info">
-            <h3>📋 Platform Capabilities</h3>
-            <div class="feature-list">
-                <div class="feature-item">📊 Upload CSV files with company data</div>
-                <div class="feature-item">🤖 AI-powered GCC presence research</div>
-                <div class="feature-item">📈 Suitability scoring and business insights</div>
-                <div class="feature-item">💾 Intelligent research caching</div>
-                <div class="feature-item">📤 Export results in multiple formats</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("""
-        <div class="help-text">
-            <h4>🆘 Need Access?</h4>
-            <p>If you don't have a passcode or are experiencing authentication issues:</p>
-            <ul>
-                <li>Contact your system administrator</li>
-                <li>Ensure you're using the correct passcode</li>
-                <li>Verify your access permissions</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Security and privacy note
-    st.markdown("""
-    <div class="security-note">
-        🔒 This platform uses secure authentication. Your credentials are encrypted and protected.
-        <br>For security purposes, sessions expire after 24 hours of inactivity.
-    </div>
-    """, unsafe_allow_html=True)
-    
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if result_holder["authenticated"]:
+        st.rerun()
+        return True
+
     return False
 
 
