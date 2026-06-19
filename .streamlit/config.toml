@@ -1,0 +1,23 @@
+[server]
+# Production server settings for Streamlit Cloud
+port = 8501
+headless = true
+enableCORS = false
+enableXsrfProtection = true
+
+[browser]
+# Disable auto-opening browser in deployment
+gatherUsageStats = false
+
+[theme]
+# Professional theme for the GCC Research Intelligence Platform
+primaryColor = "#1f77b4"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f0f2f6"
+textColor = "#262730"
+
+[client]
+# Client settings for better performance
+caching = true
+displayEnabled = true
+showErrorDetails = false

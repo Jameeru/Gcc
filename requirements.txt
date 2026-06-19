@@ -1,0 +1,36 @@
+# Core dependencies for GCC Research Intelligence Platform
+# Pinned to the exact versions this codebase has been built and tested
+# against, for reproducible installs (per design.md's "pinned versions"
+# requirement).
+streamlit==1.58.0
+pandas==2.3.3
+python-dotenv==1.2.2
+
+# Database dependencies
+SQLAlchemy==2.0.51
+psycopg2-binary==2.9.12
+alembic==1.18.4
+
+# AI/API dependencies
+openai==2.43.0
+httpx==0.28.1
+google-genai==2.9.0
+
+# Encryption (API keys at rest)
+cryptography==48.0.0
+
+# Data processing dependencies
+openpyxl==3.1.5
+xlsxwriter==3.2.9
+
+# Authentication and security
+bcrypt==5.0.0
+passlib==1.7.4
+
+# Development and testing dependencies
+pytest==9.1.1
+pytest-asyncio==1.4.0
+hypothesis==6.155.6
+black==26.5.1
+isort==8.0.1
+mypy==2.1.0
