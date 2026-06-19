@@ -533,38 +533,52 @@ def require_authentication():
 
 
 def render_session_info():
-    """Render session information in sidebar."""
+    """Render the user/session panel in the sidebar (enterprise-styled)."""
     session_manager = SessionManager()
-    
-    if session_manager.is_authenticated():
-        session_info = session_manager.get_session_info()
-        
-        st.sidebar.markdown("---")
-        st.sidebar.markdown("### 👤 Session Information")
-        
-        # Display session details
-        st.sidebar.write(f"**User ID:** {session_info.user_id}")
-        st.sidebar.write(f"**Session ID:** {session_info.session_id[:8]}...")
-        
-        # Display time remaining
-        time_remaining = session_info.time_remaining
-        hours, remainder = divmod(time_remaining.total_seconds(), 3600)
-        minutes, _ = divmod(remainder, 60)
-        st.sidebar.write(f"**Time Remaining:** {int(hours)}h {int(minutes)}m")
-        
-        # Add logout button
-        if st.sidebar.button("🚪 Logout", width='stretch'):
-            session_manager.logout()
-            st.rerun()
-        
-        # Add extend session button if less than 1 hour remaining
-        if time_remaining.total_seconds() < 3600:  # Less than 1 hour
-            if st.sidebar.button("⏰ Extend Session", width='stretch'):
+
+    if not session_manager.is_authenticated():
+        return
+
+    session_info = session_manager.get_session_info()
+
+    time_remaining = session_info.time_remaining
+    hours, remainder = divmod(time_remaining.total_seconds(), 3600)
+    minutes, _ = divmod(remainder, 60)
+    low_time = time_remaining.total_seconds() < 3600
+
+    st.sidebar.markdown(
+        f"""
+        <div class="gcc-sidebar-user">
+            <div class="gcc-avatar">U{session_info.user_id}</div>
+            <div>
+                <div class="gcc-sidebar-user-name">User #{session_info.user_id}</div>
+                <div class="gcc-sidebar-user-meta">Session {session_info.session_id[:8]}…</div>
+            </div>
+        </div>
+        <div class="gcc-sidebar-user-meta" style="margin: 0.1rem 0 0.6rem 0.2rem;">
+            ⏱️ {int(hours)}h {int(minutes)}m remaining
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if low_time:
+        col_logout, col_extend = st.sidebar.columns(2)
+        with col_logout:
+            if st.button("🚪 Logout", width='stretch', key="gcc_sidebar_logout"):
+                session_manager.logout()
+                st.rerun()
+        with col_extend:
+            if st.button("⏰ Extend", width='stretch', key="gcc_sidebar_extend"):
                 if session_manager.extend_session():
                     st.sidebar.success("Session extended!")
                     st.rerun()
                 else:
                     st.sidebar.error("Failed to extend session")
+    else:
+        if st.sidebar.button("🚪 Logout", width='stretch', key="gcc_sidebar_logout"):
+            session_manager.logout()
+            st.rerun()
 
 
 def create_user_with_passcode(passcode: str) -> bool:
