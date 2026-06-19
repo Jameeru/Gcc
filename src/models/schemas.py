@@ -31,6 +31,7 @@ class User(Base):
     
     Stores user passcodes with secure hashing and tracks login activity.
     Supports multi-user access with individual authentication.
+    Enhanced with email/password authentication support.
     """
     __tablename__ = 'users'
     
@@ -38,7 +39,15 @@ class User(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     
     # Authentication fields
-    passcode = Column(String(255), unique=True, nullable=False, index=True)
+    passcode = Column(String(255), nullable=False, index=True)
+    
+    # Email/password authentication fields (added for admin panel)
+    email = Column(String(255), nullable=True, index=True)
+    full_name = Column(String(255), nullable=True)
+    
+    # Password history for security (JSONB array of previous password hashes)
+    password_history = Column(JSONB, nullable=True)
+    last_password_change = Column(DateTime(timezone=True), nullable=True)
     
     # Audit fields
     created_at = Column(
@@ -50,8 +59,17 @@ class User(Base):
     last_login = Column(DateTime(timezone=True), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default='true')
     
+    # Define constraints and indexes
+    __table_args__ = (
+        # Email should be unique when provided
+        Index('idx_users_email', 'email'),
+        Index('idx_users_passcode', 'passcode'),
+        Index('idx_users_active', 'is_active'),
+        Index('idx_users_created_at', 'created_at'),
+    )
+    
     def __repr__(self) -> str:
-        return f"<User(id={self.id}, is_active={self.is_active}, created_at={self.created_at})>"
+        return f"<User(id={self.id}, email={self.email}, is_active={self.is_active}, created_at={self.created_at})>"
 
 
 class ResearchResult(Base):

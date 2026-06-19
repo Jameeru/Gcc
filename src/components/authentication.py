@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import streamlit as st
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import text
 
 from ..core.database import db_manager
 from ..models.schemas import User
@@ -101,13 +102,30 @@ class SessionManager:
         """
         try:
             with db_manager.get_session() as session:
-                active_users: List[User] = session.query(User).filter(
-                    User.is_active == True
-                ).all()
+                # Use raw SQL to get all active users to avoid SQLAlchemy model issues
+                results = session.execute(text("""
+                    SELECT id, email, passcode, full_name, is_active, created_at, last_login, 
+                           password_history, last_password_change
+                    FROM users 
+                    WHERE is_active = true
+                """)).fetchall()
 
-                for user in active_users:
-                    if verify_passcode(passcode, user.passcode):
-                        logger.info(f"User authenticated successfully: user_id={user.id}")
+                for row in results:
+                    if verify_passcode(passcode, row.passcode):
+                        logger.info(f"User authenticated successfully: user_id={row.id}")
+                        
+                        # Create User object manually from raw result
+                        user = User()
+                        user.id = row.id
+                        user.email = row.email
+                        user.passcode = row.passcode
+                        user.full_name = row.full_name
+                        user.is_active = row.is_active
+                        user.created_at = row.created_at
+                        user.last_login = row.last_login
+                        user.password_history = row.password_history
+                        user.last_password_change = row.last_password_change
+                        
                         return user
 
                 return None
@@ -132,14 +150,30 @@ class SessionManager:
         """
         try:
             with db_manager.get_session() as session:
-                # Get user by email
-                user = session.query(User).filter(
-                    User.email == email.lower(),
-                    User.is_active == True
-                ).first()
+                # Use raw SQL to get user by email to avoid SQLAlchemy model caching issues
+                from sqlalchemy import text
+                result = session.execute(text("""
+                    SELECT id, email, passcode, full_name, is_active, created_at, last_login, 
+                           password_history, last_password_change
+                    FROM users 
+                    WHERE email = :email AND is_active = true
+                """), {"email": email.lower()}).fetchone()
 
-                if user and user.passcode and verify_passcode(password, user.passcode):
-                    logger.info(f"User authenticated via email: user_id={user.id}, email={email}")
+                if result and result.passcode and verify_passcode(password, result.passcode):
+                    logger.info(f"User authenticated via email: user_id={result.id}, email={email}")
+                    
+                    # Create User object manually from raw result
+                    user = User()
+                    user.id = result.id
+                    user.email = result.email
+                    user.passcode = result.passcode
+                    user.full_name = result.full_name
+                    user.is_active = result.is_active
+                    user.created_at = result.created_at
+                    user.last_login = result.last_login
+                    user.password_history = result.password_history
+                    user.last_password_change = result.last_password_change
+                    
                     return user
 
                 return None
