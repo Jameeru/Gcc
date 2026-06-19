@@ -176,6 +176,28 @@ class DatabaseManager:
     def create_tables(self) -> None:
         """Create all database tables if they don't exist."""
         Base.metadata.create_all(bind=self.engine)
+
+    def add_missing_columns(self) -> None:
+        """
+        Idempotently add columns that newer model versions introduced but
+        that `create_tables()` cannot retrofit onto an already-existing table.
+
+        `Base.metadata.create_all()` only CREATEs tables that don't yet
+        exist -- it never ALTERs an existing table to add a new column. The
+        production `research_results` table already exists with live cached
+        data (deployed at gcc-checker.streamlit.app), so adding the new
+        `gcc_status`/`fit_rating`/`pain_points_summary` columns requires an
+        explicit ALTER TABLE. Postgres supports `ADD COLUMN IF NOT EXISTS`,
+        making this safe to run unconditionally on every startup.
+        """
+        statements = [
+            "ALTER TABLE research_results ADD COLUMN IF NOT EXISTS gcc_status VARCHAR(20)",
+            "ALTER TABLE research_results ADD COLUMN IF NOT EXISTS fit_rating VARCHAR(20)",
+            "ALTER TABLE research_results ADD COLUMN IF NOT EXISTS pain_points_summary TEXT",
+        ]
+        with self.get_session() as session:
+            for statement in statements:
+                session.execute(text(statement))
     
     def drop_tables(self) -> None:
         """Drop all database tables. Use with caution!"""
@@ -290,6 +312,15 @@ def init_database() -> None:
     to ensure all required tables exist.
     """
     db_manager.create_tables()
+    try:
+        db_manager.add_missing_columns()
+    except Exception:
+        # Never let a column-migration hiccup (e.g. a transient connection
+        # blip, or running against a brand-new DB where create_tables()
+        # already created the columns via the model) block app startup --
+        # the columns are nullable, so the app degrades gracefully (new
+        # fields just stay None) if this step doesn't run.
+        pass
 
 
 def check_database_health() -> dict:

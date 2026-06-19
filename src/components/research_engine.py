@@ -32,40 +32,170 @@ logger = get_logger("research_engine")
 
 T = TypeVar("T")
 
-# Exact prompt template from design.md's API Interfaces section.
-RESEARCH_PROMPT_TEMPLATE = """
-Analyze the company '{company_name}' (domain: {company_domain}) for GCC opportunities in India.
+# Exact ANSR research prompt, as specified by the user. Note: the model's
+# JSON response keys (has_gcc / fit / pain_points) are intentionally a much
+# smaller tri-state schema than the legacy 7-field one this engine used to
+# require -- see parse_research_response() below, which derives the legacy
+# fields (gcc_presence, suitability_score, business_pain_points, ...) from
+# these three so the Dashboard KPIs, History page, and CSV/Excel exports
+# keep working unchanged on top of the new prompt.
+RESEARCH_PROMPT_TEMPLATE = """You are a research analyst for ANSR, a Global Capability Center (GCC) setup and transformation firm. Research this company using web search.
 
-Provide a JSON response with the following structure:
-{{
-    "gcc_presence": boolean,
-    "gcc_location": "string or null",
-    "suitability_score": integer (1-10),
-    "business_pain_points": ["string", "string"],
-    "expansion_indicators": ["string", "string"],
-    "hiring_signals": ["string", "string"],
-    "research_summary": "string"
-}}
+Company: {company_name}
+Domain: {company_domain}
 
-Research focus:
-1. Does this company already have a GCC/development center in India?
-2. Rate suitability for GCC establishment (1=poor, 10=excellent)
-3. Identify business challenges that a GCC could solve
-4. Look for signs of expansion or growth
-5. Check for active hiring in tech/operations roles
+Q1: Does this company already own and operate a GCC / Global Capability Center / Center of Excellence / captive offshore delivery center / shared services center in India? (Not third-party outsourcing — must be their own office.)
 
-Provide factual, research-based insights only.
-"""
+Q2: Whether or not they have one, identify pain points relevant to a GCC-setup conversation: talent scarcity, rising costs, layoffs/cost-cutting, competitors with a GCC already, growth that strains back-office scaling (finance, IT, HR, procurement, engineering), or expansion signals.
 
-REQUIRED_FIELDS = (
-    "gcc_presence",
-    "gcc_location",
-    "suitability_score",
-    "business_pain_points",
-    "expansion_indicators",
-    "hiring_signals",
-    "research_summary",
+Respond ONLY with valid JSON, no markdown fences, no preamble, in exactly this format:
+{{"has_gcc": "Yes" | "No" | "Uncertain", "fit": "Strong" | "Possible" | "Unlikely", "pain_points": "2-3 sentences, or 'no specific signals found'"}}"""
+
+REQUIRED_FIELDS = ("has_gcc", "fit", "pain_points")
+
+VALID_HAS_GCC = ("Yes", "No", "Uncertain")
+VALID_FIT = ("Strong", "Possible", "Unlikely")
+
+# Maps the tri-state "fit" rating onto the legacy 1-10 suitability_score
+# scale so older UI surfaces (Dashboard KPIs, History, exports) that sort/
+# filter/display by suitability_score keep behaving sensibly.
+_FIT_TO_SCORE = {"Strong": 9, "Possible": 5, "Unlikely": 2}
+
+SYSTEM_INSTRUCTION = (
+    "You are a business research analyst specializing in Global Capability "
+    "Centers (GCCs) in India. Respond only with valid JSON matching the "
+    "exact schema requested, with no additional commentary or markdown "
+    "formatting."
 )
+
+
+class ResponseParsingError(Exception):
+    """
+    Internal, provider-agnostic exception raised by `parse_research_response`.
+
+    Each engine (OpenAI's ResearchEngine, Gemini's GeminiEngine) catches this
+    and re-raises it as its own public error type (ResearchResponseError /
+    GeminiResponseError respectively), so callers keep seeing the error type
+    they already expect while both engines share one parsing implementation
+    and can't drift apart.
+    """
+
+
+def _extract_json_object(text: str) -> Dict[str, Any]:
+    """
+    Parse a model response into a JSON object, tolerating the markdown
+    fences and stray preamble/postamble text that web-search-grounded model
+    calls are more prone to emit than a plain, non-tool JSON-mode call.
+
+    Tries, in order: the raw text as-is, the text with a leading/trailing
+    ``` fence (optionally tagged ```json) stripped, and finally the
+    substring between the first ``{`` and the last ``}`` in the text.
+
+    Raises:
+        json.JSONDecodeError: if no strategy yields valid JSON.
+    """
+    if text is None:
+        raise json.JSONDecodeError("Response was empty", "", 0)
+    stripped = text.strip()
+    if not stripped:
+        raise json.JSONDecodeError("Response was empty", stripped, 0)
+
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+
+    if stripped.startswith("```"):
+        without_fence = stripped.strip("`")
+        if "\n" in without_fence:
+            first_line, rest = without_fence.split("\n", 1)
+            if first_line.strip().isalpha():
+                without_fence = rest
+        try:
+            return json.loads(without_fence.strip())
+        except json.JSONDecodeError:
+            pass
+
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return json.loads(stripped[start : end + 1])
+
+    raise json.JSONDecodeError("No JSON object found in response", stripped, 0)
+
+
+def _normalize_enum(value: Any, valid_values: tuple, field_name: str, default: str) -> str:
+    """Case-insensitively match `value` against `valid_values`, defaulting (with a log) if no match."""
+    if isinstance(value, str):
+        for candidate in valid_values:
+            if value.strip().lower() == candidate.lower():
+                return candidate
+    logger.warning(
+        f"Model returned unrecognized {field_name}={value!r}; defaulting to {default!r}."
+    )
+    return default
+
+
+def parse_research_response(
+    raw_content: str, company_name: str, company_domain: Optional[str]
+) -> ResearchResult:
+    """
+    Shared parsing/validation logic for the ANSR has_gcc/fit/pain_points
+    response schema, used by both the OpenAI and Gemini engines so their
+    behavior can't silently drift apart.
+
+    Derives the legacy 7-field schema (gcc_presence, suitability_score,
+    business_pain_points, ...) from the three tri-state fields so existing
+    UI surfaces keep working, while also populating the new gcc_status/
+    fit_rating/pain_points_summary fields with the precise values for the
+    new results UI.
+
+    Raises:
+        ResponseParsingError: on any structural problem with the response.
+    """
+    try:
+        data: Dict[str, Any] = _extract_json_object(raw_content)
+    except json.JSONDecodeError as exc:
+        raise ResponseParsingError(f"Model response was not valid JSON: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise ResponseParsingError(
+            f"Model response must be a JSON object, got: {type(data).__name__}"
+        )
+
+    missing = [field for field in REQUIRED_FIELDS if field not in data]
+    if missing:
+        raise ResponseParsingError(f"Model response missing required fields: {missing}")
+
+    has_gcc = _normalize_enum(data.get("has_gcc"), VALID_HAS_GCC, "has_gcc", "Uncertain")
+    fit = _normalize_enum(data.get("fit"), VALID_FIT, "fit", "Possible")
+    pain_points = str(data.get("pain_points") or "").strip() or "no specific signals found"
+
+    gcc_presence = has_gcc == "Yes"
+    suitability_score = _FIT_TO_SCORE[fit]
+    business_pain_points = (
+        [] if pain_points.lower() == "no specific signals found" else [pain_points]
+    )
+
+    try:
+        return ResearchResult(
+            company_name=company_name,
+            company_domain=company_domain,
+            gcc_presence=gcc_presence,
+            gcc_location=None,
+            suitability_score=suitability_score,
+            business_pain_points=business_pain_points,
+            expansion_indicators=[],
+            hiring_signals=[],
+            research_summary=pain_points,
+            is_cached=False,
+            created_at=datetime.now(timezone.utc),
+            gcc_status=has_gcc,
+            fit_rating=fit,
+            pain_points_summary=pain_points,
+        )
+    except ValueError as exc:
+        raise ResponseParsingError(f"Research result failed validation: {exc}") from exc
 
 
 class ResearchEngineError(Exception):
@@ -181,20 +311,82 @@ class ResearchEngine:
             company_domain=company_domain or "unknown",
         )
 
+    @staticmethod
+    def _is_tool_unsupported_error(exc: Exception) -> bool:
+        """
+        Heuristic: did this failure happen because the configured OpenAI
+        account/model doesn't support the `web_search_preview` tool (in
+        which case we should gracefully fall back to a plain, non-grounded
+        call), or is it a genuine key/quota failure that must keep
+        propagating to the existing retry/backoff logic untouched?
+
+        Deliberately conservative: only a 400-shaped error whose message
+        hints at an unsupported tool/parameter is treated as a tool-support
+        issue. Auth (401/403) and rate-limit (429) status codes are never
+        swallowed here -- they must reach the normal retry/failure path.
+        """
+        status_code = getattr(exc, "status_code", None)
+        if status_code in (401, 403, 429):
+            return False
+        message = str(exc).lower()
+        hints = (
+            "web_search",
+            "tool",
+            "not supported",
+            "unsupported",
+            "unknown parameter",
+            "invalid value",
+            "does not support",
+        )
+        if status_code == 400 and any(hint in message for hint in hints):
+            return True
+        return False
+
     def _call_openai(self, prompt: str) -> str:
-        """Make a single OpenAI chat completion call and return the raw text content."""
+        """
+        Call OpenAI with live web search grounding via the Responses API, so
+        research is actually based on current public information rather
+        than only the model's training-data recall -- the prompt itself
+        instructs "Research this company using web search".
+
+        Falls back to a plain (non-grounded) chat completion if the
+        search-enabled call fails for a reason that looks like the
+        configured account/model doesn't support the web_search tool.
+        Genuine key/quota failures (401/403/429-shaped) are left to
+        propagate untouched to the existing retry logic in
+        `research_company`.
+        """
+        try:
+            response = self.client.responses.create(
+                model=self.config.model,
+                tools=[{"type": "web_search_preview", "search_context_size": "low"}],
+                input=[
+                    {"role": "system", "content": SYSTEM_INSTRUCTION},
+                    {"role": "user", "content": prompt},
+                ],
+                max_output_tokens=self.config.max_tokens,
+            )
+            text = (getattr(response, "output_text", None) or "").strip()
+            if text:
+                return text
+            logger.warning(
+                "Web search response had empty output_text; falling back to non-grounded call."
+            )
+        except Exception as exc:  # noqa: BLE001 - heuristically classified below
+            if not self._is_tool_unsupported_error(exc):
+                raise
+            logger.warning(
+                f"Web search tool unavailable, falling back to non-grounded call: {exc}"
+            )
+
+        return self._call_openai_without_search(prompt)
+
+    def _call_openai_without_search(self, prompt: str) -> str:
+        """Plain (non-grounded) chat completion -- the original, reliable call path."""
         response = self.client.chat.completions.create(
             model=self.config.model,
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a business research analyst specializing in Global "
-                        "Capability Centers (GCCs) in India. Respond only with valid "
-                        "JSON matching the exact schema requested, with no additional "
-                        "commentary or markdown formatting."
-                    ),
-                },
+                {"role": "system", "content": SYSTEM_INSTRUCTION},
                 {"role": "user", "content": prompt},
             ],
             max_tokens=self.config.max_tokens,
@@ -207,60 +399,17 @@ class ResearchEngine:
         self, raw_content: str, company_name: str, company_domain: Optional[str]
     ) -> ResearchResult:
         """
-        Parse the model's JSON response and validate it against the required
-        schema, raising ResearchResponseError on any structural problem.
+        Parse the model's JSON response (has_gcc/fit/pain_points schema) and
+        validate it, raising ResearchResponseError on any structural
+        problem. Delegates to the shared `parse_research_response` so this
+        engine and the Gemini engine can't drift apart on parsing behavior.
 
         **Validates: Requirements 5.3, 5.6**
         """
         try:
-            data: Dict[str, Any] = json.loads(raw_content)
-        except json.JSONDecodeError as exc:
-            raise ResearchResponseError(f"Model response was not valid JSON: {exc}") from exc
-
-        missing = [field for field in REQUIRED_FIELDS if field not in data]
-        if missing:
-            raise ResearchResponseError(f"Model response missing required fields: {missing}")
-
-        try:
-            score = int(data["suitability_score"])
-        except (TypeError, ValueError) as exc:
-            raise ResearchResponseError(
-                f"suitability_score must be an integer, got: {data['suitability_score']!r}"
-            ) from exc
-
-        # Clamp rather than reject outright on minor model deviations (e.g. 0 or 11),
-        # since the rest of the research is still valuable; log when this happens.
-        if not 1 <= score <= 10:
-            logger.warning(
-                f"Model returned out-of-range suitability_score={score} for "
-                f"'{company_name}'; clamping to [1, 10]."
-            )
-            score = max(1, min(10, score))
-
-        def _as_str_list(value: Any) -> list:
-            if value is None:
-                return []
-            if isinstance(value, list):
-                return [str(v) for v in value]
-            return [str(value)]
-
-        try:
-            return ResearchResult(
-                company_name=company_name,
-                company_domain=company_domain,
-                gcc_presence=bool(data["gcc_presence"]),
-                gcc_location=data.get("gcc_location"),
-                suitability_score=score,
-                business_pain_points=_as_str_list(data.get("business_pain_points")),
-                expansion_indicators=_as_str_list(data.get("expansion_indicators")),
-                hiring_signals=_as_str_list(data.get("hiring_signals")),
-                research_summary=str(data.get("research_summary") or "").strip()
-                or "No summary provided.",
-                is_cached=False,
-                created_at=datetime.now(timezone.utc),
-            )
-        except ValueError as exc:
-            raise ResearchResponseError(f"Research result failed validation: {exc}") from exc
+            return parse_research_response(raw_content, company_name, company_domain)
+        except ResponseParsingError as exc:
+            raise ResearchResponseError(str(exc)) from exc
 
     def research_company(
         self,

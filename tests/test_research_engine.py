@@ -26,26 +26,26 @@ from openai import APIConnectionError, RateLimitError
 
 from src.components.research_engine import (
     REQUIRED_FIELDS,
+    VALID_FIT,
+    VALID_HAS_GCC,
     ResearchAPIError,
     ResearchEngine,
     ResearchEngineError,
     ResearchNoKeyConfiguredError,
     ResearchResponseError,
+    ResponseParsingError,
     exponential_backoff_retry,
     get_research_engine,
+    parse_research_response,
 )
 from src.models.entities import ResearchResult
 
 
 def _valid_payload(**overrides):
     payload = {
-        "gcc_presence": True,
-        "gcc_location": "Bangalore, India",
-        "suitability_score": 8,
-        "business_pain_points": ["High operational costs"],
-        "expansion_indicators": ["Recent funding round"],
-        "hiring_signals": ["Active job postings"],
-        "research_summary": "Strong GCC candidate.",
+        "has_gcc": "Yes",
+        "fit": "Strong",
+        "pain_points": "High operational costs and talent shortages noted.",
     }
     payload.update(overrides)
     return payload
@@ -60,6 +60,15 @@ def _make_completion(content: str):
     completion = MagicMock()
     completion.choices = [choice]
     return completion
+
+
+def _make_responses_api_result(text: str):
+    """Build a minimal object mimicking the OpenAI Responses API result shape
+    (response.output_text), used by ResearchEngine._call_openai's primary
+    (web-search-grounded) call path."""
+    response = MagicMock()
+    response.output_text = text
+    return response
 
 
 def _make_rate_limit_error():
@@ -117,6 +126,14 @@ class TestExponentialBackoffRetry:
 
 
 class TestParseAndValidate:
+    """
+    Covers ResearchEngine._parse_and_validate, which now just delegates to
+    the shared parse_research_response (see TestParseResearchResponse below)
+    and re-wraps ResponseParsingError as ResearchResponseError. Kept here
+    (rather than folded entirely into the shared-function tests) so the
+    wrapping behavior itself stays covered.
+    """
+
     def setup_method(self):
         self.engine = ResearchEngine(client=Mock())
 
@@ -126,9 +143,10 @@ class TestParseAndValidate:
         )
         assert isinstance(result, ResearchResult)
         assert result.company_name == "Microsoft"
-        assert result.suitability_score == 8
+        assert result.gcc_status == "Yes"
+        assert result.fit_rating == "Strong"
         assert result.gcc_presence is True
-        assert result.business_pain_points == ["High operational costs"]
+        assert result.suitability_score == 9
 
     def test_invalid_json_raises_response_error(self):
         with pytest.raises(ResearchResponseError, match="not valid JSON"):
@@ -136,7 +154,7 @@ class TestParseAndValidate:
 
     def test_missing_required_field_raises_response_error(self):
         payload = _valid_payload()
-        del payload["suitability_score"]
+        del payload["pain_points"]
         with pytest.raises(ResearchResponseError, match="missing required fields"):
             self.engine._parse_and_validate(json.dumps(payload), "Acme", None)
 
@@ -147,49 +165,133 @@ class TestParseAndValidate:
         with pytest.raises(ResearchResponseError):
             self.engine._parse_and_validate(json.dumps(payload), "Acme", None)
 
-    def test_score_above_range_is_clamped_not_rejected(self):
-        result = self.engine._parse_and_validate(
-            json.dumps(_valid_payload(suitability_score=15)), "Acme", None
-        )
-        assert result.suitability_score == 10
 
-    def test_score_below_range_is_clamped_not_rejected(self):
-        result = self.engine._parse_and_validate(
-            json.dumps(_valid_payload(suitability_score=-3)), "Acme", None
-        )
-        assert result.suitability_score == 1
+class TestParseResearchResponse:
+    """
+    Unit tests for the shared parse_research_response() function in
+    research_engine.py, which both ResearchEngine and GeminiEngine delegate
+    to for the has_gcc/fit/pain_points response schema.
+    """
 
-    def test_non_integer_score_raises_response_error(self):
-        with pytest.raises(ResearchResponseError, match="must be an integer"):
-            self.engine._parse_and_validate(
-                json.dumps(_valid_payload(suitability_score="not-a-number")), "Acme", None
-            )
-
-    def test_scalar_list_fields_coerced_to_single_item_list(self):
-        result = self.engine._parse_and_validate(
-            json.dumps(_valid_payload(business_pain_points="Just one pain point")),
-            "Acme",
-            None,
+    def test_valid_response_derives_legacy_fields_correctly(self):
+        result = parse_research_response(
+            json.dumps(_valid_payload()), "Microsoft", "microsoft.com"
         )
-        assert result.business_pain_points == ["Just one pain point"]
-
-    def test_none_list_fields_coerced_to_empty_list(self):
-        result = self.engine._parse_and_validate(
-            json.dumps(_valid_payload(expansion_indicators=None)), "Acme", None
-        )
+        assert isinstance(result, ResearchResult)
+        assert result.company_name == "Microsoft"
+        assert result.company_domain == "microsoft.com"
+        assert result.gcc_status == "Yes"
+        assert result.fit_rating == "Strong"
+        assert result.pain_points_summary == "High operational costs and talent shortages noted."
+        # Derived legacy fields.
+        assert result.gcc_presence is True
+        assert result.suitability_score == 9
+        assert result.business_pain_points == ["High operational costs and talent shortages noted."]
+        assert result.research_summary == "High operational costs and talent shortages noted."
         assert result.expansion_indicators == []
+        assert result.hiring_signals == []
+        assert result.is_cached is False
+        assert isinstance(result.created_at, datetime)
 
-    def test_blank_summary_defaults_to_placeholder(self):
-        result = self.engine._parse_and_validate(
-            json.dumps(_valid_payload(research_summary="   ")), "Acme", None
+    def test_invalid_json_raises_response_parsing_error(self):
+        with pytest.raises(ResponseParsingError, match="not valid JSON"):
+            parse_research_response("not json {{{", "Acme", None)
+
+    def test_empty_string_raises_response_parsing_error(self):
+        with pytest.raises(ResponseParsingError):
+            parse_research_response("", "Acme", None)
+
+    def test_non_object_json_raises_response_parsing_error(self):
+        with pytest.raises(ResponseParsingError, match="must be a JSON object"):
+            parse_research_response("[1, 2, 3]", "Acme", None)
+
+    @pytest.mark.parametrize("field", REQUIRED_FIELDS)
+    def test_each_required_field_is_actually_required(self, field):
+        payload = _valid_payload()
+        del payload[field]
+        with pytest.raises(ResponseParsingError, match="missing required fields"):
+            parse_research_response(json.dumps(payload), "Acme", None)
+
+    @pytest.mark.parametrize("has_gcc_value,expected_presence", [("Yes", True), ("No", False), ("Uncertain", False)])
+    def test_has_gcc_values_map_to_gcc_presence(self, has_gcc_value, expected_presence):
+        result = parse_research_response(
+            json.dumps(_valid_payload(has_gcc=has_gcc_value)), "Acme", None
         )
-        assert result.research_summary == "No summary provided."
+        assert result.gcc_status == has_gcc_value
+        assert result.gcc_presence is expected_presence
+
+    @pytest.mark.parametrize("fit_value,expected_score", [("Strong", 9), ("Possible", 5), ("Unlikely", 2)])
+    def test_fit_values_map_to_suitability_score(self, fit_value, expected_score):
+        result = parse_research_response(
+            json.dumps(_valid_payload(fit=fit_value)), "Acme", None
+        )
+        assert result.fit_rating == fit_value
+        assert result.suitability_score == expected_score
+
+    def test_invalid_has_gcc_value_is_normalized_not_rejected(self):
+        """Invalid enum values are normalized to a default rather than
+        raising -- see _normalize_enum in research_engine.py."""
+        result = parse_research_response(
+            json.dumps(_valid_payload(has_gcc="Maybe")), "Acme", None
+        )
+        assert result.gcc_status == "Uncertain"
+
+    def test_invalid_fit_value_is_normalized_not_rejected(self):
+        result = parse_research_response(
+            json.dumps(_valid_payload(fit="Excellent")), "Acme", None
+        )
+        assert result.fit_rating == "Possible"
+
+    def test_has_gcc_value_normalization_is_case_insensitive(self):
+        result = parse_research_response(
+            json.dumps(_valid_payload(has_gcc="yes")), "Acme", None
+        )
+        assert result.gcc_status == "Yes"
+
+    def test_no_specific_signals_found_pain_points_yields_empty_list(self):
+        result = parse_research_response(
+            json.dumps(_valid_payload(pain_points="no specific signals found")), "Acme", None
+        )
+        assert result.business_pain_points == []
+        assert result.pain_points_summary == "no specific signals found"
+
+    def test_no_specific_signals_found_is_case_insensitive(self):
+        result = parse_research_response(
+            json.dumps(_valid_payload(pain_points="No Specific Signals Found")), "Acme", None
+        )
+        assert result.business_pain_points == []
+
+    def test_blank_pain_points_defaults_to_no_specific_signals_found(self):
+        result = parse_research_response(
+            json.dumps(_valid_payload(pain_points="   ")), "Acme", None
+        )
+        assert result.pain_points_summary == "no specific signals found"
+        assert result.business_pain_points == []
+
+    def test_markdown_fenced_json_is_tolerated(self):
+        fenced = "```json\n" + json.dumps(_valid_payload()) + "\n```"
+        result = parse_research_response(fenced, "Acme", None)
+        assert result.gcc_status == "Yes"
+
+    def test_json_with_preamble_text_is_tolerated(self):
+        wrapped = "Here is the research result:\n" + json.dumps(_valid_payload()) + "\nThanks."
+        result = parse_research_response(wrapped, "Acme", None)
+        assert result.gcc_status == "Yes"
 
 
 class TestResearchCompany:
+    """
+    research_company's primary call path is now _call_openai, which calls
+    self.client.responses.create(...) (the web-search-grounded Responses
+    API) and reads response.output_text -- NOT the old
+    chat.completions.create()/choices[0].message.content path. These tests
+    mock responses.create accordingly; the fallback-to-chat-completions path
+    is covered separately in TestOpenAISearchFallback.
+    """
+
     def test_success_on_first_attempt(self):
         mock_client = Mock()
-        mock_client.chat.completions.create.return_value = _make_completion(
+        mock_client.responses.create.return_value = _make_responses_api_result(
             json.dumps(_valid_payload())
         )
         engine = ResearchEngine(client=mock_client)
@@ -197,13 +299,14 @@ class TestResearchCompany:
         result = engine.research_company("Microsoft", "microsoft.com")
 
         assert result.company_name == "Microsoft"
-        assert mock_client.chat.completions.create.call_count == 1
+        assert mock_client.responses.create.call_count == 1
+        mock_client.chat.completions.create.assert_not_called()
 
     def test_retries_on_rate_limit_then_succeeds(self):
         mock_client = Mock()
-        mock_client.chat.completions.create.side_effect = [
+        mock_client.responses.create.side_effect = [
             _make_rate_limit_error(),
-            _make_completion(json.dumps(_valid_payload())),
+            _make_responses_api_result(json.dumps(_valid_payload())),
         ]
         engine = ResearchEngine(client=mock_client)
         engine._config = Mock(max_retries=3, retry_delay=1.0, max_retry_delay=60.0)
@@ -212,11 +315,11 @@ class TestResearchCompany:
             result = engine.research_company("Acme", "acme.com")
 
         assert result.company_name == "Acme"
-        assert mock_client.chat.completions.create.call_count == 2
+        assert mock_client.responses.create.call_count == 2
 
     def test_exhausted_retries_raise_research_api_error(self):
         mock_client = Mock()
-        mock_client.chat.completions.create.side_effect = _make_connection_error()
+        mock_client.responses.create.side_effect = _make_connection_error()
         engine = ResearchEngine(client=mock_client)
         engine._config = Mock(max_retries=3, retry_delay=1.0, max_retry_delay=60.0)
 
@@ -224,7 +327,7 @@ class TestResearchCompany:
             with pytest.raises(ResearchAPIError):
                 engine.research_company("Acme", "acme.com")
 
-        assert mock_client.chat.completions.create.call_count == 3
+        assert mock_client.responses.create.call_count == 3
 
     def test_malformed_response_not_retried(self):
         """
@@ -233,7 +336,7 @@ class TestResearchCompany:
         directly without burning through retry attempts.
         """
         mock_client = Mock()
-        mock_client.chat.completions.create.return_value = _make_completion("not valid json")
+        mock_client.responses.create.return_value = _make_responses_api_result("not valid json")
         engine = ResearchEngine(client=mock_client)
         engine._config = Mock(max_retries=3, retry_delay=1.0, max_retry_delay=60.0)
 
@@ -242,11 +345,83 @@ class TestResearchCompany:
 
         # Only one call -- the bad JSON came back successfully from the API,
         # so the retry loop (which only catches API-level failures) never re-invoked it.
-        assert mock_client.chat.completions.create.call_count == 1
+        assert mock_client.responses.create.call_count == 1
 
     def test_research_engine_error_is_common_base_class(self):
         assert issubclass(ResearchAPIError, ResearchEngineError)
         assert issubclass(ResearchResponseError, ResearchEngineError)
+
+
+class TestOpenAISearchFallback:
+    """
+    Covers ResearchEngine._call_openai's fallback to the plain (non-grounded)
+    chat-completions path: triggered when the web_search_preview tool isn't
+    supported (heuristically detected by _is_tool_unsupported_error), or
+    when response.output_text comes back empty/falsy.
+    """
+
+    def test_falls_back_when_tool_unsupported_error_is_raised(self):
+        mock_client = Mock()
+        unsupported_exc = Exception("Unknown parameter: 'tools[0].type' (does not support this tool)")
+        unsupported_exc.status_code = 400
+        mock_client.responses.create.side_effect = unsupported_exc
+        mock_client.chat.completions.create.return_value = _make_completion(
+            json.dumps(_valid_payload())
+        )
+        engine = ResearchEngine(client=mock_client)
+
+        result = engine.research_company("Acme", "acme.com")
+
+        assert result.company_name == "Acme"
+        mock_client.responses.create.assert_called_once()
+        mock_client.chat.completions.create.assert_called_once()
+
+    def test_falls_back_when_output_text_is_empty(self):
+        mock_client = Mock()
+        mock_client.responses.create.return_value = _make_responses_api_result("")
+        mock_client.chat.completions.create.return_value = _make_completion(
+            json.dumps(_valid_payload())
+        )
+        engine = ResearchEngine(client=mock_client)
+
+        result = engine.research_company("Acme", "acme.com")
+
+        assert result.company_name == "Acme"
+        mock_client.chat.completions.create.assert_called_once()
+
+    def test_does_not_fall_back_on_auth_error(self):
+        """401/403/429-shaped errors must keep propagating to the existing
+        retry/failure path rather than being swallowed as a tool-support issue."""
+        mock_client = Mock()
+        auth_exc = Exception("Invalid API key")
+        auth_exc.status_code = 401
+        mock_client.responses.create.side_effect = auth_exc
+        engine = ResearchEngine(client=mock_client)
+        engine._config = Mock(max_retries=1, retry_delay=1.0, max_retry_delay=60.0)
+
+        with pytest.raises(ResearchAPIError):
+            engine.research_company("Acme", "acme.com")
+
+        mock_client.chat.completions.create.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "exc,expected",
+        [
+            (Exception("web_search not supported by this model"), True),
+            (Exception("unknown parameter: tools"), True),
+            (Exception("does not support tool calling"), True),
+            (Exception("connection reset"), False),
+        ],
+    )
+    def test_is_tool_unsupported_error_message_heuristics(self, exc, expected):
+        exc.status_code = 400
+        assert ResearchEngine._is_tool_unsupported_error(exc) is expected
+
+    @pytest.mark.parametrize("status_code", [401, 403, 429])
+    def test_is_tool_unsupported_error_never_true_for_auth_or_rate_limit(self, status_code):
+        exc = Exception("web_search tool not supported")
+        exc.status_code = status_code
+        assert ResearchEngine._is_tool_unsupported_error(exc) is False
 
 
 class TestNoKeyConfiguredFailsFast:
@@ -292,7 +467,7 @@ class TestNoKeyConfiguredFailsFast:
         # When a client is injected (tests/DI), research_company must not
         # require any key to be configured at all.
         mock_client = Mock()
-        mock_client.chat.completions.create.return_value = _make_completion(
+        mock_client.responses.create.return_value = _make_responses_api_result(
             json.dumps(_valid_payload())
         )
         engine = ResearchEngine(client=mock_client)
@@ -345,68 +520,31 @@ def domain_strategy(draw):
     
     return f"{domain_label}.{tld}".lower()
 
-# Strategy for generating valid research response JSON data
+# Strategy for generating valid research response JSON data (new
+# has_gcc/fit/pain_points tri-state schema).
 @st.composite
 def valid_research_response_strategy(draw):
     """Generate valid research response data that should pass validation."""
     return {
-        "gcc_presence": draw(st.booleans()),
-        "gcc_location": draw(st.one_of(
-            st.none(),
-            st.text(alphabet=string.ascii_letters + string.digits + " ,.-", min_size=1, max_size=100)
-        )),
-        "suitability_score": draw(st.integers(min_value=1, max_value=10)),
-        "business_pain_points": draw(st.lists(
-            st.text(alphabet=valid_company_chars, min_size=1, max_size=200),
-            min_size=0, max_size=10
-        )),
-        "expansion_indicators": draw(st.lists(
-            st.text(alphabet=valid_company_chars, min_size=1, max_size=200),
-            min_size=0, max_size=10
-        )),
-        "hiring_signals": draw(st.lists(
-            st.text(alphabet=valid_company_chars, min_size=1, max_size=200),
-            min_size=0, max_size=10
-        )),
-        "research_summary": draw(st.text(alphabet=valid_company_chars, min_size=1, max_size=1000))
+        "has_gcc": draw(st.sampled_from(VALID_HAS_GCC)),
+        "fit": draw(st.sampled_from(VALID_FIT)),
+        "pain_points": draw(st.text(alphabet=valid_company_chars, min_size=1, max_size=1000)),
     }
-
-# Helper function for checking int conversion
-def is_convertible_to_int(value):
-    """Check if a value can be converted to int without error."""
-    try:
-        int(value)
-        return True
-    except (ValueError, TypeError):
-        return False
-
-# Strategy for generating invalid suitability scores that should raise errors
-invalid_scores_strategy = st.one_of(
-    st.text().filter(lambda x: not is_convertible_to_int(x)),  # Non-numeric string values
-    st.none(),  # None values
-    st.lists(st.integers()),  # Lists
-    st.dictionaries(st.text(), st.integers())  # Dictionaries
-)
-
-# Strategy for generating out-of-range but valid numeric scores
-out_of_range_scores_strategy = st.one_of(
-    st.integers(max_value=0),
-    st.integers(min_value=11),
-    st.floats(allow_nan=False, allow_infinity=False)  # Float values that can be converted
-)
 
 
 class TestResearchResponseValidationProperties:
     """
-    Property-based tests for research response validation.
-    
+    Property-based tests for research response validation against the new
+    has_gcc/fit/pain_points tri-state schema.
+
     **Property 9: Research Response Validation**
-    *For any* research operation that completes successfully, the returned result 
-    shall be valid JSON containing all required fields with suitability scores between 1-10
-    
+    *For any* research operation that completes successfully, the returned
+    result shall derive from valid JSON containing all required fields,
+    with a suitability_score (derived from `fit`) between 1-10.
+
     **Validates: Requirements 5.3, 5.6**
     """
-    
+
     def setup_method(self):
         """Set up test fixtures."""
         self.engine = ResearchEngine(client=Mock())
@@ -422,25 +560,24 @@ class TestResearchResponseValidationProperties:
     ):
         """
         **Property 9: Research Response Validation**
-        
+
         For any valid research response JSON containing all required fields
-        with suitability scores between 1-10, the validation should succeed
-        and return a proper ResearchResult object.
-        
+        (has_gcc/fit/pain_points), validation should succeed and return a
+        proper ResearchResult with both the new tri-state fields and the
+        derived legacy fields populated correctly.
+
         **Validates: Requirements 5.3, 5.6**
         """
-        # Convert response data to JSON string
         json_response = json.dumps(response_data)
-        
-        # Parse and validate the response
+
         result = self.engine._parse_and_validate(json_response, company_name, domain)
-        
-        # Verify all required properties
+
         assert isinstance(result, ResearchResult)
         assert result.company_name == company_name
         assert result.company_domain == domain
-        assert result.gcc_presence == response_data["gcc_presence"]
-        assert result.gcc_location == response_data["gcc_location"]
+        assert result.gcc_status == response_data["has_gcc"]
+        assert result.fit_rating == response_data["fit"]
+        assert result.gcc_presence == (response_data["has_gcc"] == "Yes")
         assert 1 <= result.suitability_score <= 10
         assert isinstance(result.business_pain_points, list)
         assert isinstance(result.expansion_indicators, list)
@@ -461,130 +598,87 @@ class TestResearchResponseValidationProperties:
     ):
         """
         **Property 9: Research Response Validation - Missing Fields**
-        
+
         For any research response JSON missing required fields,
         the validation should fail with ResearchResponseError.
-        
+
         **Validates: Requirements 5.3, 5.6**
         """
-        # Generate valid response data
-        response_data = {
-            "gcc_presence": True,
-            "gcc_location": "Bangalore, India",
-            "suitability_score": 8,
-            "business_pain_points": ["High costs"],
-            "expansion_indicators": ["Growth signals"],
-            "hiring_signals": ["Active recruiting"],
-            "research_summary": "Good candidate"
-        }
-        
-        # Remove one required field
+        response_data = _valid_payload()
         del response_data[missing_field]
         json_response = json.dumps(response_data)
-        
-        # Should raise ResearchResponseError
+
         with pytest.raises(ResearchResponseError, match="missing required fields"):
             self.engine._parse_and_validate(json_response, company_name, domain)
 
     @given(
         company_name=company_name_strategy(),
         domain=st.one_of(st.none(), domain_strategy()),
-        invalid_score=invalid_scores_strategy
+        invalid_has_gcc=st.text().filter(lambda x: x.strip().lower() not in {v.lower() for v in VALID_HAS_GCC}),
     )
     @settings(max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture])
-    def test_property_9_truly_invalid_suitability_scores_fail_validation(
-        self, company_name: str, domain: Optional[str], invalid_score: Any
+    def test_property_9_invalid_has_gcc_values_are_normalized_to_uncertain(
+        self, company_name: str, domain: Optional[str], invalid_has_gcc: str
     ):
         """
-        **Property 9: Research Response Validation - Invalid Score Types**
-        
-        For any research response with non-numeric suitability scores,
-        the validation should fail with ResearchResponseError.
-        
+        **Property 9: Research Response Validation - Enum Normalization**
+
+        For any has_gcc value that doesn't match the valid enum
+        (case-insensitively), the engine should normalize it to "Uncertain"
+        rather than raising -- see _normalize_enum in research_engine.py.
+
         **Validates: Requirements 5.3, 5.6**
         """
-        response_data = {
-            "gcc_presence": True,
-            "gcc_location": "Mumbai, India",
-            "suitability_score": invalid_score,
-            "business_pain_points": ["Cost challenges"],
-            "expansion_indicators": ["Market expansion"],
-            "hiring_signals": ["Tech hiring"],
-            "research_summary": "Analysis complete"
-        }
-        
+        response_data = _valid_payload(has_gcc=invalid_has_gcc)
         json_response = json.dumps(response_data)
-        
-        # These should all raise ResearchResponseError
-        with pytest.raises(ResearchResponseError, match="must be an integer"):
-            self.engine._parse_and_validate(json_response, company_name, domain)
+
+        result = self.engine._parse_and_validate(json_response, company_name, domain)
+        assert result.gcc_status == "Uncertain"
+        assert result.gcc_presence is False
 
     @given(
         company_name=company_name_strategy(),
         domain=st.one_of(st.none(), domain_strategy()),
-        out_of_range_score=out_of_range_scores_strategy
+        fit_value=st.sampled_from(VALID_FIT),
     )
-    @settings(max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture])
-    def test_property_9_out_of_range_numeric_scores_are_clamped(
-        self, company_name: str, domain: Optional[str], out_of_range_score: Union[int, float]
+    @settings(max_examples=30, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    def test_property_9_fit_values_always_map_to_in_range_score(
+        self, company_name: str, domain: Optional[str], fit_value: str
     ):
         """
-        **Property 9: Research Response Validation - Score Clamping**
-        
-        For any research response with numeric but out-of-range suitability scores,
-        the scores should be clamped to the valid 1-10 range.
-        
+        **Property 9: Research Response Validation - Score Derivation**
+
+        For any valid `fit` value, the derived suitability_score must
+        always land in the valid 1-10 range.
+
         **Validates: Requirements 5.3, 5.6**
         """
-        response_data = {
-            "gcc_presence": True,
-            "gcc_location": "Mumbai, India", 
-            "suitability_score": out_of_range_score,
-            "business_pain_points": ["Cost challenges"],
-            "expansion_indicators": ["Market expansion"],
-            "hiring_signals": ["Tech hiring"],
-            "research_summary": "Analysis complete"
-        }
-        
+        response_data = _valid_payload(fit=fit_value)
         json_response = json.dumps(response_data)
-        
-        # Should not raise an exception but clamp the value
+
         result = self.engine._parse_and_validate(json_response, company_name, domain)
         assert 1 <= result.suitability_score <= 10
-        
-        # Verify clamping behavior
-        try:
-            int_score = int(out_of_range_score)
-            if int_score < 1:
-                assert result.suitability_score == 1
-            elif int_score > 10:
-                assert result.suitability_score == 10
-            else:
-                assert result.suitability_score == int_score
-        except (ValueError, OverflowError):
-            # For extreme float values that can't be converted to int
-            # The system should still clamp to valid range
-            assert 1 <= result.suitability_score <= 10
+        assert result.fit_rating == fit_value
 
     def test_property_9_malformed_json_fails_validation_simple(self):
         """
         **Property 9: Research Response Validation - JSON Format**
-        
+
         Test specific cases of malformed JSON that should fail validation.
-        
+
         **Validates: Requirements 5.3, 5.6**
         """
         malformed_responses = [
             "not json at all",
             '{"incomplete": json',
-            '{gcc_presence: true}',  # unquoted keys
+            '{has_gcc: true}',  # unquoted keys
             '',  # empty string
         ]
-        
+
         for malformed_json in malformed_responses:
             with pytest.raises(ResearchResponseError):
                 self.engine._parse_and_validate(malformed_json, "Test Company", "test.com")
-    
+
         # Test valid JSON that's not an object - these should also fail but differently
         non_object_json = [
             'null',
@@ -592,7 +686,7 @@ class TestResearchResponseValidationProperties:
             '"string"',
             '42'
         ]
-        
+
         for non_object_json_str in non_object_json:
             with pytest.raises((ResearchResponseError, TypeError)):
                 self.engine._parse_and_validate(non_object_json_str, "Test Company", "test.com")
@@ -607,10 +701,10 @@ class TestResearchResponseValidationProperties:
     ):
         """
         **Property 9: Research Response Validation - JSON Format**
-        
+
         For any malformed JSON response, validation should fail
         with ResearchResponseError indicating JSON parsing failure.
-        
+
         **Validates: Requirements 5.3, 5.6**
         """
         # Test with obviously non-JSON content
@@ -620,51 +714,34 @@ class TestResearchResponseValidationProperties:
     @given(
         company_name=company_name_strategy(),
         domain=st.one_of(st.none(), domain_strategy()),
-        list_field=st.sampled_from(["business_pain_points", "expansion_indicators", "hiring_signals"]),
-        list_value=st.one_of(
-            st.none(),
-            st.text(),
-            st.integers(),
-            st.lists(st.text(), min_size=0, max_size=5)
-        )
+        pain_points_value=st.one_of(
+            st.text(min_size=1, max_size=500),
+            st.just("no specific signals found"),
+            st.just("No Specific Signals Found"),
+        ),
     )
     @settings(max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture])
-    def test_property_9_list_fields_coercion_behavior(
-        self, company_name: str, domain: Optional[str], list_field: str, list_value: Any
+    def test_property_9_pain_points_coercion_behavior(
+        self, company_name: str, domain: Optional[str], pain_points_value: str
     ):
         """
-        **Property 9: Research Response Validation - List Field Handling**
-        
-        For any research response, list fields should be properly coerced:
-        - None values become empty lists
-        - Scalar values become single-item lists
-        - Lists remain as lists (with string conversion of items)
-        
+        **Property 9: Research Response Validation - Pain Points Handling**
+
+        For any pain_points string, business_pain_points should be derived
+        as [] when the text is exactly "no specific signals found"
+        (case-insensitively), and a single-item list otherwise.
+
         **Validates: Requirements 5.3, 5.6**
         """
-        response_data = {
-            "gcc_presence": False,
-            "gcc_location": None,
-            "suitability_score": 5,
-            "business_pain_points": [],
-            "expansion_indicators": [],
-            "hiring_signals": [],
-            "research_summary": "Research completed"
-        }
-        
-        # Set the specific list field to the test value
-        response_data[list_field] = list_value
+        response_data = _valid_payload(pain_points=pain_points_value)
         json_response = json.dumps(response_data)
-        
+
         result = self.engine._parse_and_validate(json_response, company_name, domain)
-        
-        # Check that the field was properly coerced to a list
-        field_result = getattr(result, list_field)
-        assert isinstance(field_result, list)
-        
-        if list_value is None:
-            assert field_result == []
-        elif isinstance(list_value, list):
-            assert field_result == [str(item) for item in list_value]
+
+        assert isinstance(result.business_pain_points, list)
+        if pain_points_value.strip().lower() == "no specific signals found":
+            assert result.business_pain_points == []
         else:
-            assert field_result == [str(list_value)]
+            assert result.business_pain_points == [pain_points_value]
+        assert result.pain_points_summary == pain_points_value
+        assert result.research_summary == pain_points_value

@@ -44,7 +44,9 @@ from ..utils.logging import get_logger, log_event
 from .research_engine import (
     REQUIRED_FIELDS,
     RESEARCH_PROMPT_TEMPLATE,
+    ResponseParsingError,
     exponential_backoff_retry,
+    parse_research_response,
 )
 
 logger = get_logger("gemini_engine")
@@ -157,7 +159,59 @@ class GeminiEngine:
         )
 
     def _call_gemini_with_key(self, api_key: str, prompt: str) -> str:
-        """Make a single Gemini generate_content call with a specific key."""
+        """
+        Make a single Gemini generate_content call with a specific key,
+        using live Google Search grounding so research reflects current
+        public information -- the prompt itself instructs "Research this
+        company using web search".
+
+        Gemini's API does not support combining the `google_search`
+        grounding tool with `response_mime_type="application/json"` (it
+        raises "Function calling with a response mime type:
+        'application/json' is unsupported"), so the grounded call below
+        omits response_mime_type entirely and relies on the prompt's own
+        "Respond ONLY with valid JSON" instruction instead.
+
+        If the grounded call fails for a reason that is NOT a key-level
+        failure (those must keep propagating untouched to `_call_gemini`'s
+        existing key-rotation/failover loop), fall back once to a
+        non-grounded call on this same key, which restores
+        response_mime_type for maximum JSON reliability.
+        """
+        try:
+            text = self._call_gemini_grounded(api_key, prompt)
+            if text:
+                return text
+            logger.warning(
+                "Gemini grounded response had no text; falling back to non-grounded call."
+            )
+        except Exception as exc:  # noqa: BLE001
+            if _is_key_level_failure(exc):
+                raise
+            logger.warning(
+                f"Gemini search grounding failed (non-key-level), falling back to "
+                f"non-grounded call: {exc}"
+            )
+
+        return self._call_gemini_no_search(api_key, prompt)
+
+    def _call_gemini_grounded(self, api_key: str, prompt: str) -> str:
+        """Gemini call with Google Search grounding enabled (no JSON response_mime_type)."""
+        client = self._client_for_key(api_key)
+        response = client.models.generate_content(
+            model=self.model,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=SYSTEM_INSTRUCTION,
+                temperature=0.1,
+                max_output_tokens=2000,
+                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+            ),
+        )
+        return (response.text or "").strip()
+
+    def _call_gemini_no_search(self, api_key: str, prompt: str) -> str:
+        """Plain (non-grounded) Gemini call -- the original, reliable call path."""
         client = self._client_for_key(api_key)
         response = client.models.generate_content(
             model=self.model,
@@ -211,54 +265,15 @@ class GeminiEngine:
     def _parse_and_validate(
         self, raw_content: str, company_name: str, company_domain: Optional[str]
     ) -> ResearchResult:
-        """Parse Gemini's JSON response against the same schema research_engine.py uses."""
+        """
+        Parse Gemini's JSON response (has_gcc/fit/pain_points schema).
+        Delegates to the shared `parse_research_response` so this engine and
+        ResearchEngine (OpenAI) can't drift apart on parsing behavior.
+        """
         try:
-            data: Dict[str, Any] = json.loads(raw_content)
-        except json.JSONDecodeError as exc:
-            raise GeminiResponseError(f"Model response was not valid JSON: {exc}") from exc
-
-        missing = [field for field in REQUIRED_FIELDS if field not in data]
-        if missing:
-            raise GeminiResponseError(f"Model response missing required fields: {missing}")
-
-        try:
-            score = int(data["suitability_score"])
-        except (TypeError, ValueError) as exc:
-            raise GeminiResponseError(
-                f"suitability_score must be an integer, got: {data['suitability_score']!r}"
-            ) from exc
-
-        if not 1 <= score <= 10:
-            logger.warning(
-                f"Gemini returned out-of-range suitability_score={score} for "
-                f"'{company_name}'; clamping to [1, 10]."
-            )
-            score = max(1, min(10, score))
-
-        def _as_str_list(value: Any) -> list:
-            if value is None:
-                return []
-            if isinstance(value, list):
-                return [str(v) for v in value]
-            return [str(value)]
-
-        try:
-            return ResearchResult(
-                company_name=company_name,
-                company_domain=company_domain,
-                gcc_presence=bool(data["gcc_presence"]),
-                gcc_location=data.get("gcc_location"),
-                suitability_score=score,
-                business_pain_points=_as_str_list(data.get("business_pain_points")),
-                expansion_indicators=_as_str_list(data.get("expansion_indicators")),
-                hiring_signals=_as_str_list(data.get("hiring_signals")),
-                research_summary=str(data.get("research_summary") or "").strip()
-                or "No summary provided.",
-                is_cached=False,
-                created_at=datetime.now(timezone.utc),
-            )
-        except ValueError as exc:
-            raise GeminiResponseError(f"Research result failed validation: {exc}") from exc
+            return parse_research_response(raw_content, company_name, company_domain)
+        except ResponseParsingError as exc:
+            raise GeminiResponseError(str(exc)) from exc
 
     def research_company(
         self,

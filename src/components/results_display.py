@@ -24,8 +24,8 @@ from .results_processor import ProcessedItem
 
 SORT_COLUMNS = {
     "Company Name": "company_name",
-    "Suitability Score": "suitability_score",
-    "GCC Presence": "gcc_presence",
+    "GCC Status": "gcc_status",
+    "Fit Rating": "fit_rating",
     "Researched At": "created_at",
 }
 
@@ -36,9 +36,13 @@ def _item_to_row(item: ProcessedItem) -> Dict[str, Any]:
     result = item.research_result
 
     if result is not None:
+        pain_points = result.pain_points_summary or result.research_summary
         return {
             "company_name": result.company_name,
             "company_domain": result.company_domain,
+            "gcc_status": result.gcc_status or ("Yes" if result.gcc_presence else "No"),
+            "fit_rating": result.fit_rating,
+            "pain_points_summary": pain_points,
             "gcc_presence": result.gcc_presence,
             "gcc_location": result.gcc_location,
             "suitability_score": result.suitability_score,
@@ -56,6 +60,9 @@ def _item_to_row(item: ProcessedItem) -> Dict[str, Any]:
     return {
         "company_name": record.name,
         "company_domain": record.domain,
+        "gcc_status": None,
+        "fit_rating": None,
+        "pain_points_summary": None,
         "gcc_presence": None,
         "gcc_location": None,
         "suitability_score": None,
@@ -73,7 +80,7 @@ def _apply_filters(
     df: pd.DataFrame,
     search_term: str,
     gcc_filter: str,
-    score_range: tuple,
+    fit_filter: str,
     show_errors_only: bool,
 ) -> pd.DataFrame:
     """
@@ -91,20 +98,15 @@ def _apply_filters(
         mask = (
             filtered["company_name"].fillna("").str.lower().str.contains(term)
             | filtered["company_domain"].fillna("").str.lower().str.contains(term)
-            | filtered["research_summary"].fillna("").str.lower().str.contains(term)
+            | filtered["pain_points_summary"].fillna("").str.lower().str.contains(term)
         )
         filtered = filtered[mask]
 
-    if gcc_filter == "Has GCC":
-        filtered = filtered[filtered["gcc_presence"] == True]  # noqa: E712
-    elif gcc_filter == "No GCC":
-        filtered = filtered[filtered["gcc_presence"] == False]  # noqa: E712
+    if gcc_filter != "All":
+        filtered = filtered[filtered["gcc_status"] == gcc_filter]
 
-    min_score, max_score = score_range
-    filtered = filtered[
-        filtered["suitability_score"].isna()
-        | filtered["suitability_score"].between(min_score, max_score)
-    ]
+    if fit_filter != "All":
+        filtered = filtered[filtered["fit_rating"] == fit_filter]
 
     return filtered
 
@@ -135,17 +137,17 @@ def render_results_table(items: List[ProcessedItem]) -> None:
 
     with col2:
         gcc_filter = st.selectbox(
-            "GCC Status", options=["All", "Has GCC", "No GCC"], key="gcc_results_gcc_filter"
+            "Has GCC", options=["All", "Yes", "No", "Uncertain"], key="gcc_results_gcc_filter"
         )
 
     with col3:
         show_errors_only = st.checkbox("Errors only", key="gcc_results_errors_only")
 
-    score_range = st.slider(
-        "Suitability Score Range", min_value=1, max_value=10, value=(1, 10), key="gcc_results_score_range"
+    fit_filter = st.selectbox(
+        "Fit", options=["All", "Strong", "Possible", "Unlikely"], key="gcc_results_fit_filter"
     )
 
-    filtered_df = _apply_filters(df, search_term, gcc_filter, score_range, show_errors_only)
+    filtered_df = _apply_filters(df, search_term, gcc_filter, fit_filter, show_errors_only)
 
     st.markdown("#### 📊 Sort")
     sort_col1, sort_col2 = st.columns(2)
@@ -178,10 +180,9 @@ def render_results_table(items: List[ProcessedItem]) -> None:
         columns={
             "company_name": "Company",
             "company_domain": "Domain",
-            "gcc_presence": "GCC Presence",
-            "gcc_location": "GCC Location",
-            "suitability_score": "Score",
-            "research_summary": "Summary",
+            "gcc_status": "Has GCC",
+            "fit_rating": "Fit",
+            "pain_points_summary": "Pain Points",
             "error": "Error",
         }
     )
@@ -189,10 +190,9 @@ def render_results_table(items: List[ProcessedItem]) -> None:
         "Status",
         "Company",
         "Domain",
-        "GCC Presence",
-        "GCC Location",
-        "Score",
-        "Summary",
+        "Has GCC",
+        "Fit",
+        "Pain Points",
         "Error",
     ]
     st.dataframe(display_df[display_columns], width='stretch', hide_index=True)

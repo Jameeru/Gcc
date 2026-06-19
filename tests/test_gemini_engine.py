@@ -36,13 +36,9 @@ from src.models.entities import ResearchResult
 
 def _valid_payload(**overrides):
     payload = {
-        "gcc_presence": True,
-        "gcc_location": "Bangalore, India",
-        "suitability_score": 8,
-        "business_pain_points": ["High operational costs"],
-        "expansion_indicators": ["Recent funding round"],
-        "hiring_signals": ["Active job postings"],
-        "research_summary": "Strong GCC candidate.",
+        "has_gcc": "Yes",
+        "fit": "Strong",
+        "pain_points": "High operational costs and talent shortages noted.",
     }
     payload.update(overrides)
     return payload
@@ -84,6 +80,14 @@ class TestIsKeyLevelFailure:
 
 
 class TestParseAndValidate:
+    """
+    GeminiEngine._parse_and_validate delegates all real parsing logic to the
+    shared `parse_research_response` (also used by ResearchEngine/OpenAI) --
+    the full parsing/derivation contract is exercised against that shared
+    function in test_research_engine.py's TestParseResearchResponse class.
+    Here we only confirm delegation and GeminiResponseError wrapping.
+    """
+
     def setup_method(self):
         self.engine = GeminiEngine(api_keys=["fake-key"])
 
@@ -93,7 +97,9 @@ class TestParseAndValidate:
         )
         assert isinstance(result, ResearchResult)
         assert result.company_name == "Microsoft"
-        assert result.suitability_score == 8
+        assert result.gcc_status == "Yes"
+        assert result.fit_rating == "Strong"
+        assert result.suitability_score == 9
         assert result.gcc_presence is True
 
     def test_invalid_json_raises_response_error(self):
@@ -102,41 +108,21 @@ class TestParseAndValidate:
 
     def test_missing_required_field_raises_response_error(self):
         payload = _valid_payload()
-        del payload["suitability_score"]
+        del payload["pain_points"]
         with pytest.raises(GeminiResponseError, match="missing required fields"):
             self.engine._parse_and_validate(json.dumps(payload), "Acme", None)
 
-    def test_score_above_range_is_clamped_not_rejected(self):
+    def test_invalid_has_gcc_value_is_normalized_not_rejected(self):
         result = self.engine._parse_and_validate(
-            json.dumps(_valid_payload(suitability_score=15)), "Acme", None
+            json.dumps(_valid_payload(has_gcc="Maybe")), "Acme", None
         )
-        assert result.suitability_score == 10
+        assert result.gcc_status == "Uncertain"
 
-    def test_score_below_range_is_clamped_not_rejected(self):
+    def test_invalid_fit_value_is_normalized_not_rejected(self):
         result = self.engine._parse_and_validate(
-            json.dumps(_valid_payload(suitability_score=-3)), "Acme", None
+            json.dumps(_valid_payload(fit="Excellent")), "Acme", None
         )
-        assert result.suitability_score == 1
-
-    def test_non_integer_score_raises_response_error(self):
-        with pytest.raises(GeminiResponseError, match="must be an integer"):
-            self.engine._parse_and_validate(
-                json.dumps(_valid_payload(suitability_score="not-a-number")), "Acme", None
-            )
-
-    def test_scalar_list_fields_coerced_to_single_item_list(self):
-        result = self.engine._parse_and_validate(
-            json.dumps(_valid_payload(business_pain_points="Just one pain point")),
-            "Acme",
-            None,
-        )
-        assert result.business_pain_points == ["Just one pain point"]
-
-    def test_blank_summary_defaults_to_placeholder(self):
-        result = self.engine._parse_and_validate(
-            json.dumps(_valid_payload(research_summary="   ")), "Acme", None
-        )
-        assert result.research_summary == "No summary provided."
+        assert result.fit_rating == "Possible"
 
 
 class TestNoKeysConfiguredFailsFast:
@@ -172,7 +158,13 @@ class TestResearchCompanySuccess:
             result = engine.research_company("Acme", "acme.com")
 
         assert result.company_name == "Acme"
+        # Only the grounded call path should have run -- no fallback needed
+        # since the grounded mock returned valid, non-empty text.
         assert mock_client.models.generate_content.call_count == 1
+        call_kwargs = mock_client.models.generate_content.call_args.kwargs
+        config = call_kwargs["config"]
+        assert config.tools is not None
+        assert config.response_mime_type is None
 
     def test_malformed_response_not_retried(self):
         engine = GeminiEngine(api_keys=["key-1"])
@@ -182,9 +174,80 @@ class TestResearchCompanySuccess:
             with pytest.raises(GeminiResponseError):
                 engine.research_company("Acme", "acme.com")
 
-        # Bad JSON came back successfully from the API -- the retry loop only
-        # catches API-level failures, so it shouldn't have retried.
-        assert mock_client.models.generate_content.call_count == 1
+        # Bad JSON came back successfully from BOTH the grounded call and its
+        # fallback (same mock serves both) -- the retry loop only catches
+        # API-level failures, so the outer exponential-backoff loop shouldn't
+        # have retried this. Two calls (grounded + fallback) is the most that
+        # should happen for a single attempt.
+        assert mock_client.models.generate_content.call_count == 2
+
+
+class TestGroundedSearchFallback:
+    """
+    GeminiEngine._call_gemini_with_key tries the Google-Search-grounded call
+    first; if that raises a non-key-level exception, or returns empty text,
+    it falls back once to the plain (response_mime_type=JSON) call on the
+    same key. Key-level failures (auth/quota) must propagate untouched so
+    the outer key-rotation loop in _call_gemini can try the other key.
+    """
+
+    def test_falls_back_when_grounded_call_raises_non_key_level_error(self):
+        engine = GeminiEngine(api_keys=["key-1"])
+        mock_client = Mock()
+        mock_client.models.generate_content.side_effect = [
+            Exception("Function calling with a response mime type is unsupported"),
+            _make_response(json.dumps(_valid_payload())),
+        ]
+        with patch("src.components.gemini_engine.genai.Client", return_value=mock_client):
+            result = engine.research_company("Acme", "acme.com")
+
+        assert result.company_name == "Acme"
+        assert mock_client.models.generate_content.call_count == 2
+        first_config = mock_client.models.generate_content.call_args_list[0].kwargs["config"]
+        second_config = mock_client.models.generate_content.call_args_list[1].kwargs["config"]
+        assert first_config.tools is not None
+        assert first_config.response_mime_type is None
+        assert second_config.response_mime_type == "application/json"
+
+    def test_falls_back_when_grounded_call_returns_empty_text(self):
+        engine = GeminiEngine(api_keys=["key-1"])
+        mock_client = Mock()
+        mock_client.models.generate_content.side_effect = [
+            _make_response(""),
+            _make_response(json.dumps(_valid_payload())),
+        ]
+        with patch("src.components.gemini_engine.genai.Client", return_value=mock_client):
+            result = engine.research_company("Acme", "acme.com")
+
+        assert result.company_name == "Acme"
+        assert mock_client.models.generate_content.call_count == 2
+
+    def test_key_level_failure_on_grounded_call_propagates_without_fallback(self):
+        """
+        A key-level failure (auth/quota) must propagate straight out of
+        _call_gemini_with_key without attempting the no-search fallback on
+        the same key -- it's the *other key* that should be tried next, by
+        the outer _call_gemini loop, not a different call style on this key.
+        """
+        engine = GeminiEngine(api_keys=["key-1", "key-2"])
+        bad_client = Mock()
+        bad_client.models.generate_content.side_effect = _make_key_level_error()
+        good_client = Mock()
+        good_client.models.generate_content.return_value = _make_response(
+            json.dumps(_valid_payload())
+        )
+
+        def _fake_client(api_key):
+            return bad_client if api_key == "key-1" else good_client
+
+        with patch("src.components.gemini_engine.genai.Client", side_effect=_fake_client):
+            result = engine.research_company("Acme", "acme.com")
+
+        assert result.company_name == "Acme"
+        # bad_client's grounded call raised a key-level failure -- only
+        # called once (no no-search fallback attempted on the same key).
+        bad_client.models.generate_content.assert_called_once()
+        good_client.models.generate_content.assert_called_once()
 
 
 class TestKeyRotationAndFailover:

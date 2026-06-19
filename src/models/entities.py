@@ -94,29 +94,42 @@ class ResearchResult:
     research_summary: str
     is_cached: bool
     created_at: datetime
-    
+    # --- Added for the ANSR tri-state research prompt (has_gcc/fit/pain_points) ---
+    # These are nullable/optional and additive: existing callers/tests that only
+    # construct a ResearchResult with the original 11 positional fields keep
+    # working unchanged. They carry the precise tri-state values the new
+    # results UI displays directly (Has GCC / Fit / Pain Points columns),
+    # while the legacy fields above continue to be derived from them so the
+    # Dashboard KPIs, History page, and CSV/Excel exports keep working as-is.
+    gcc_status: Optional[str] = None       # "Yes" | "No" | "Uncertain"
+    fit_rating: Optional[str] = None       # "Strong" | "Possible" | "Unlikely"
+    pain_points_summary: Optional[str] = None  # 2-3 sentence summary, or "no specific signals found"
+
+    _VALID_GCC_STATUS = {"Yes", "No", "Uncertain"}
+    _VALID_FIT_RATING = {"Strong", "Possible", "Unlikely"}
+
     def __post_init__(self) -> None:
         """
         Validates research result data after initialization.
-        
+
         Ensures that the suitability score is within the valid range (1-10)
         as specified in the requirements. This validation is critical for
         maintaining data integrity and API contract compliance.
-        
+
         Raises:
             ValueError: If suitability_score is not between 1 and 10 (inclusive)
         """
         if not 1 <= self.suitability_score <= 10:
             raise ValueError("Suitability score must be between 1 and 10")
-        
+
         # Ensure company_name is not empty
         if not self.company_name or not self.company_name.strip():
             raise ValueError("Company name cannot be empty")
-        
+
         # Ensure research_summary is not empty
         if not self.research_summary or not self.research_summary.strip():
             raise ValueError("Research summary cannot be empty")
-        
+
         # Ensure lists are not None (can be empty)
         if self.business_pain_points is None:
             self.business_pain_points = []
@@ -124,6 +137,14 @@ class ResearchResult:
             self.expansion_indicators = []
         if self.hiring_signals is None:
             self.hiring_signals = []
+
+        # New tri-state fields are optional (nullable), but if present must
+        # be one of the allowed enum values -- catches a malformed/typo'd
+        # value early rather than letting it silently corrupt the UI later.
+        if self.gcc_status is not None and self.gcc_status not in self._VALID_GCC_STATUS:
+            raise ValueError(f"gcc_status must be one of {sorted(self._VALID_GCC_STATUS)}")
+        if self.fit_rating is not None and self.fit_rating not in self._VALID_FIT_RATING:
+            raise ValueError(f"fit_rating must be one of {sorted(self._VALID_FIT_RATING)}")
 
 
 @dataclass

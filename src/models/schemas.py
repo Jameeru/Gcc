@@ -85,7 +85,15 @@ class ResearchResult(Base):
     expansion_indicators = Column(Text, nullable=True)
     hiring_signals = Column(Text, nullable=True)
     research_summary = Column(Text, nullable=True)
-    
+
+    # Tri-state fields from the ANSR research prompt (has_gcc/fit/pain_points).
+    # Nullable/additive so the already-deployed production table doesn't need
+    # a destructive migration -- see database.py's init_database(), which adds
+    # these via idempotent ALTER TABLE ... ADD COLUMN IF NOT EXISTS at startup.
+    gcc_status = Column(String(20), nullable=True)
+    fit_rating = Column(String(20), nullable=True)
+    pain_points_summary = Column(Text, nullable=True)
+
     # Metadata and audit fields
     research_metadata = Column(JSONB, nullable=True)
     created_at = Column(

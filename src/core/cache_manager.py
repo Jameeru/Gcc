@@ -155,7 +155,15 @@ class CacheManager:
                         hiring_signals=hiring_signals,
                         research_summary=db_result.research_summary or "",
                         is_cached=True,
-                        created_at=db_result.created_at
+                        created_at=db_result.created_at,
+                        # New tri-state fields -- `getattr` defends against
+                        # rows cached before this column existed in case the
+                        # ORM model/DB ever drift (e.g. a stale connection
+                        # pool holding an older mapped class); None is a
+                        # valid, expected value for old cached rows.
+                        gcc_status=getattr(db_result, "gcc_status", None),
+                        fit_rating=getattr(db_result, "fit_rating", None),
+                        pain_points_summary=getattr(db_result, "pain_points_summary", None),
                     )
                     
                     logger.info(
@@ -234,6 +242,9 @@ class CacheManager:
                     existing.expansion_indicators = self._format_text_array(research_result.expansion_indicators)
                     existing.hiring_signals = self._format_text_array(research_result.hiring_signals)
                     existing.research_summary = research_result.research_summary
+                    existing.gcc_status = research_result.gcc_status
+                    existing.fit_rating = research_result.fit_rating
+                    existing.pain_points_summary = research_result.pain_points_summary
                     existing.updated_at = datetime.now(timezone.utc)
                     
                     # Set research metadata
@@ -261,6 +272,9 @@ class CacheManager:
                         expansion_indicators=self._format_text_array(research_result.expansion_indicators),
                         hiring_signals=self._format_text_array(research_result.hiring_signals),
                         research_summary=research_result.research_summary,
+                        gcc_status=research_result.gcc_status,
+                        fit_rating=research_result.fit_rating,
+                        pain_points_summary=research_result.pain_points_summary,
                         research_metadata={
                             'cache_created': True,
                             'source_row_index': company_record.row_index,
