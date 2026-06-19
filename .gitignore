@@ -1,28 +1,109 @@
-# Environment / secrets
+# Environment and Configuration
 .env
 .env.local
-*.env.local
+.env.development
+.env.production
+secrets.toml
+config.toml
+
+# API Keys and Sensitive Data
+*.key
+*.pem
+*_key
+*_secret
 
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
-*.egg-info/
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
 .eggs/
-.mypy_cache/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Testing
 .pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
 .hypothesis/
-venv/
-.venv/
-env/
 
 # Streamlit
 .streamlit/secrets.toml
 
-# OS / editor
-.DS_Store
-.vscode/
-.idea/
+# Database
+*.db
+*.sqlite
+*.sqlite3
 
 # Logs
 *.log
+logs/
+log/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Documentation builds
+docs/_build/
+
+# PyCharm
+.idea/
+
+# Hypothesis test data
+.hypothesis/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
