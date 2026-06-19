@@ -1,56 +1,89 @@
 #!/usr/bin/env python3
 """
-Simple script to create a user for the GCC Research Intelligence Platform.
+User Creation Utility for GCC Research Intelligence Platform
 
-This script can be run locally or in the cloud to create user accounts.
-It uses the same environment variables as the main application.
+Creates regular users for the main application (not admin users).
+Admin users are created through the admin panel.
+
+Usage:
+    python3 create_user.py <email> <password> <full_name>
+
+Example:
+    python3 create_user.py john@company.com MyPassword123! "John Doe"
 """
 
-import os
 import sys
-from pathlib import Path
+import os
 
-# Add src to Python path
-src_path = Path(__file__).parent / "src"
-sys.path.insert(0, str(src_path))
-
-def create_user():
-    """Create a user with a custom passcode."""
+def create_regular_user(email: str, password: str, full_name: str):
+    """Create a regular user for the main application."""
     
-    print("🏢 GCC Research Intelligence Platform - Create User")
-    print("=" * 50)
+    # Ensure environment is set up
+    if not os.environ.get('DATABASE_URL') and not os.environ.get('SUPABASE_URL'):
+        print("❌ Error: Database environment variables not set.")
+        print("Make sure SUPABASE_URL and DATABASE_URL are configured in your .env file.")
+        return False
     
-    # Check if we have a passcode argument
-    if len(sys.argv) < 2:
-        print("Usage: python create_user.py <your-passcode>")
-        print("Example: python create_user.py mypasscode123")
-        return
-    
-    passcode = sys.argv[1]
-    
-    if len(passcode) < 6:
-        print("❌ Passcode must be at least 6 characters long")
-        return
+    # Import after environment setup
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
     
     try:
-        from src.core.database import init_database
-        from src.components.authentication import create_user_with_passcode
+        from src.components.admin_panel import UserManager
         
-        print("🔗 Connecting to database...")
-        init_database()
+        user_manager = UserManager()
+        result = user_manager.create_user(email, password, full_name)
         
-        print(f"👤 Creating user with passcode: {passcode}")
-        if create_user_with_passcode(passcode):
-            print("✅ User created successfully!")
-            print(f"   You can now log into the app with passcode: {passcode}")
+        if result.success:
+            print(f"✅ User created successfully!")
+            print(f"   Email: {email}")
+            print(f"   Name: {full_name}")
+            print(f"   User ID: {result.user_id}")
+            print()
+            print("🎯 The user can now login to the main application:")
+            print("   1. Run: streamlit run main.py")
+            print("   2. Choose 'Email & Password' authentication")
+            print(f"   3. Login with: {email} / {password}")
+            return True
         else:
-            print("❌ Failed to create user (passcode might already exist)")
+            print(f"❌ Failed to create user: {result.message}")
+            return False
             
     except Exception as e:
-        print(f"❌ Error: {e}")
-        print("\nMake sure your environment variables are set correctly:")
-        print("- SUPABASE_URL")
-        print("- SUPABASE_KEY")
+        print(f"❌ Error creating user: {e}")
+        return False
+
+
+def main():
+    """Main entry point."""
+    if len(sys.argv) != 4:
+        print("Usage: python3 create_user.py <email> <password> <full_name>")
+        print()
+        print("Example:")
+        print('  python3 create_user.py john@company.com MyPassword123! "John Doe"')
+        print()
+        print("Password Requirements:")
+        print("  - At least 8 characters long")
+        print("  - At least one uppercase letter (A-Z)")
+        print("  - At least one lowercase letter (a-z)")
+        print("  - At least one number (0-9)")
+        print("  - At least one special character (!@#$%^&*())")
+        sys.exit(1)
+    
+    email = sys.argv[1]
+    password = sys.argv[2]
+    full_name = sys.argv[3]
+    
+    print("👤 Creating Regular User for Main Application")
+    print("=" * 50)
+    print(f"Email: {email}")
+    print(f"Name: {full_name}")
+    print("=" * 50)
+    
+    success = create_regular_user(email, password, full_name)
+    
+    if not success:
+        sys.exit(1)
+
 
 if __name__ == "__main__":
-    create_user()
+    main()
