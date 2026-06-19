@@ -119,6 +119,38 @@ class SessionManager:
             logger.error(f"Unexpected error during authentication: {e}")
             return None
     
+    def _get_user_by_email_password(self, email: str, password: str) -> Optional[User]:
+        """
+        Retrieve user by email and password (new authentication method).
+
+        Args:
+            email: User email address
+            password: User password
+
+        Returns:
+            User object if found and active, None otherwise.
+        """
+        try:
+            with db_manager.get_session() as session:
+                # Get user by email
+                user = session.query(User).filter(
+                    User.email == email.lower(),
+                    User.is_active == True
+                ).first()
+
+                if user and user.passcode and verify_passcode(password, user.passcode):
+                    logger.info(f"User authenticated via email: user_id={user.id}, email={email}")
+                    return user
+
+                return None
+
+        except SQLAlchemyError as e:
+            logger.error(f"Database error during email authentication: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error during email authentication: {e}")
+            return None
+    
     def _update_last_login(self, user_id: int) -> None:
         """
         Update user's last login timestamp.
@@ -138,27 +170,36 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Unexpected error updating last login: {e}")
     
-    def authenticate_user(self, passcode: str) -> bool:
+    def authenticate_user(self, identifier: str, password: str = None) -> bool:
         """
-        Authenticate user with passcode and create session.
+        Authenticate user with passcode or email/password.
         
         Args:
-            passcode: User passcode for authentication.
+            identifier: User passcode or email address
+            password: Password (required if identifier is email)
             
         Returns:
             True if authentication successful, False otherwise.
         """
-        if not passcode or not passcode.strip():
-            logger.warning("Empty passcode provided for authentication")
+        if not identifier or not identifier.strip():
+            logger.warning("Empty identifier provided for authentication")
             return False
         
-        # Clean passcode input
-        passcode = passcode.strip()
+        # Clean identifier input
+        identifier = identifier.strip()
         
-        # Authenticate with database
-        user = self._get_user_by_passcode(passcode)
+        # Determine authentication method
+        user = None
+        
+        if '@' in identifier and password:
+            # Email/password authentication
+            user = self._get_user_by_email_password(identifier, password)
+        else:
+            # Traditional passcode authentication (backward compatibility)
+            user = self._get_user_by_passcode(identifier)
+        
         if not user:
-            logger.warning(f"Authentication failed for passcode")
+            logger.warning(f"Authentication failed for identifier: {identifier}")
             return False
         
         # Create session
@@ -360,13 +401,44 @@ def render_login_page() -> bool:
         result_holder = {"authenticated": False}
 
         with st.form("login_form", clear_on_submit=True):
-            passcode = st.text_input(
-                "Passcode",
-                type="password",
-                placeholder="Enter passcode",
-                help="Case-sensitive. Provided by your system administrator.",
-                label_visibility="collapsed",
+            # Authentication mode selection
+            auth_mode = st.radio(
+                "Authentication Method",
+                ["Email & Password", "Passcode Only"],
+                horizontal=True,
+                help="Choose your preferred login method"
             )
+            
+            if auth_mode == "Email & Password":
+                email = st.text_input(
+                    "Email Address",
+                    placeholder="Enter your email",
+                    help="Your registered email address",
+                    label_visibility="visible",
+                )
+                
+                password = st.text_input(
+                    "Password",
+                    type="password",
+                    placeholder="Enter your password",
+                    help="Your account password",
+                    label_visibility="visible",
+                )
+                
+                identifier = email
+                auth_password = password
+                
+            else:
+                passcode = st.text_input(
+                    "Passcode",
+                    type="password",
+                    placeholder="Enter passcode",
+                    help="Case-sensitive. Provided by your system administrator.",
+                    label_visibility="visible",
+                )
+                
+                identifier = passcode
+                auth_password = None
 
             submit_button = st.form_submit_button(
                 "Sign In", type="primary", width='stretch'
@@ -374,29 +446,55 @@ def render_login_page() -> bool:
 
             if submit_button:
                 # Enhanced validation with required field checking
-                validation = EnhancedInputValidator.validate_passcode_input(passcode)
-                
-                if not validation["valid"]:
-                    st.error(f"🚫 {validation['error']}")
-                else:
-                    session_manager = SessionManager()
-                    with st.spinner("Verifying credentials…"):
-                        try:
-                            if session_manager.authenticate_user(passcode):
-                                st.success("✅ Authenticated — redirecting…")
-                                time.sleep(0.4)
-                                result_holder["authenticated"] = True
-                            else:
+                if auth_mode == "Email & Password":
+                    if not email or not password:
+                        st.error("🚫 Please enter both email and password.")
+                    elif not email.strip() or not password.strip():
+                        st.error("🚫 Email and password cannot be empty.")
+                    else:
+                        session_manager = SessionManager()
+                        with st.spinner("Verifying credentials…"):
+                            try:
+                                if session_manager.authenticate_user(email, password):
+                                    st.success("✅ Authenticated — redirecting…")
+                                    time.sleep(0.4)
+                                    result_holder["authenticated"] = True
+                                else:
+                                    st.error(
+                                        "❌ Invalid email or password. Check your credentials "
+                                        "or contact your administrator."
+                                    )
+                            except Exception as e:
+                                logger.error(f"Authentication error: {e}")
                                 st.error(
-                                    "❌ Incorrect passcode. Check for typos or "
-                                    "caps lock, or contact your administrator."
+                                    "⚠️ A system error occurred. Please try again "
+                                    "in a moment."
                                 )
-                        except Exception as e:
-                            logger.error(f"Authentication error: {e}")
-                            st.error(
-                                "⚠️ A system error occurred. Please try again "
-                                "in a moment."
-                            )
+                else:
+                    # Passcode authentication
+                    validation = EnhancedInputValidator.validate_passcode_input(passcode)
+                    
+                    if not validation["valid"]:
+                        st.error(f"🚫 {validation['error']}")
+                    else:
+                        session_manager = SessionManager()
+                        with st.spinner("Verifying credentials…"):
+                            try:
+                                if session_manager.authenticate_user(passcode):
+                                    st.success("✅ Authenticated — redirecting…")
+                                    time.sleep(0.4)
+                                    result_holder["authenticated"] = True
+                                else:
+                                    st.error(
+                                        "❌ Incorrect passcode. Check for typos or "
+                                        "caps lock, or contact your administrator."
+                                    )
+                            except Exception as e:
+                                logger.error(f"Authentication error: {e}")
+                                st.error(
+                                    "⚠️ A system error occurred. Please try again "
+                                    "in a moment."
+                                )
 
         # Forgot password link
         st.markdown("<div style='text-align: center; margin-top: 15px;'>", unsafe_allow_html=True)
