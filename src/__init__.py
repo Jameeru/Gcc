@@ -1,0 +1,1 @@
+# GCC Research Intelligence Platform

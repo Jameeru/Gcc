@@ -43,15 +43,17 @@ class DatabaseConfig:
     
     def _build_database_url(self) -> str:
         """Build PostgreSQL connection URL from Supabase configuration."""
+        # Check if DATABASE_URL is provided directly (preferred for Streamlit Cloud)
+        database_url = os.getenv('DATABASE_URL')
+        if database_url:
+            return database_url
+            
+        # Fallback to constructing from SUPABASE_URL and SUPABASE_KEY
         parsed = urlparse(self.supabase_url)
         
-        # Extract database connection details from Supabase URL
+        # Extract database connection details
         host = parsed.hostname
-        
-        # For Supabase, use the pooled connection on port 6543, not direct port 5432
-        # This avoids connection timeout issues with Streamlit Cloud
-        pooler_host = host.replace('supabase.co', 'pooler.supabase.com')
-        port = 6543  # Supabase pooler port
+        port = parsed.port or 5432
         
         # Use service_role key for direct database access
         # In production, this should be the service role key with appropriate permissions
@@ -59,7 +61,7 @@ class DatabaseConfig:
         password = self.supabase_key
         database = 'postgres'  # Default Supabase database name
         
-        return f"postgresql://{username}:{password}@{pooler_host}:{port}/{database}"
+        return f"postgresql://{username}:{password}@{host}:{port}/{database}"
 
 
 class DatabaseManager:
