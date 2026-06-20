@@ -58,7 +58,14 @@ class User(Base):
     )
     last_login = Column(DateTime(timezone=True), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default='true')
-    
+
+    # Role-based access control: 'user' (default, normal dashboard) or
+    # 'admin' (redirected to the admin dashboard on login). Nullable=False
+    # with a server_default so the already-deployed production table can
+    # pick this up via an additive ALTER TABLE ... ADD COLUMN IF NOT EXISTS
+    # in database.py's add_missing_columns() without a destructive migration.
+    role = Column(String(20), nullable=False, default='user', server_default='user')
+
     # Define constraints and indexes
     __table_args__ = (
         # Email should be unique when provided
@@ -66,6 +73,8 @@ class User(Base):
         Index('idx_users_passcode', 'passcode'),
         Index('idx_users_active', 'is_active'),
         Index('idx_users_created_at', 'created_at'),
+        Index('idx_users_role', 'role'),
+        CheckConstraint("role IN ('user', 'admin')", name='ck_users_role'),
     )
     
     def __repr__(self) -> str:

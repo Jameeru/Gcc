@@ -53,8 +53,28 @@ NAV_ITEMS = [
     ("history", "📈  History", "Research History", "Search and export every result ever researched"),
     ("settings", "⚙️  Settings", "Settings", "Manage the API keys used for company research"),
 ]
-_LABEL_TO_KEY = {label: key for key, label, _, _ in NAV_ITEMS}
-_KEY_TO_TITLE = {key: (title, subtitle) for key, _, title, subtitle in NAV_ITEMS}
+
+# Only shown/added to the nav for users whose session role is "admin" --
+# see _nav_items_for_role() / render_sidebar().
+ADMIN_NAV_ITEM = (
+    "admin",
+    "🛠️  Admin Dashboard",
+    "Admin Dashboard",
+    "Manage users, accounts, and system administration",
+)
+
+# One-shot flag so the role-based landing page (admin -> Admin Dashboard,
+# user -> Dashboard) is only forced immediately after login, not on every
+# rerun -- once the nav radio widget has a value, the user's own navigation
+# choices take over.
+ROLE_REDIRECT_DONE_KEY = "gcc_role_redirect_done"
+
+
+def _nav_items_for_role(role: str):
+    """Return the nav items visible for the given session role."""
+    if role == "admin":
+        return [ADMIN_NAV_ITEM] + NAV_ITEMS
+    return NAV_ITEMS
 
 
 def main():
@@ -89,11 +109,37 @@ def main():
     render_main_app(session_manager)
 
 
-def render_sidebar() -> str:
+def render_sidebar(session_manager) -> str:
     """
     Render the enterprise sidebar shell: brand header, nav menu, live batch
     badge, and the user/session panel. Returns the selected nav page key.
+
+    Admin-role users get an extra "Admin Dashboard" nav entry and are
+    redirected there by default immediately after login; normal users see
+    the regular nav and land on "Dashboard" as before.
     """
+    session_info = session_manager.get_session_info()
+    role = session_info.role if session_info else "user"
+    nav_items = _nav_items_for_role(role)
+    label_to_key = {label: key for key, label, _, _ in nav_items}
+
+    # Role-based landing page, re-evaluated on every fresh login (not just
+    # the very first one): admins land on the Admin Dashboard, normal users
+    # land on Dashboard. Keyed off session_id (a new random token is minted
+    # on every authenticate_user() call) rather than a plain boolean, so
+    # that Streamlit session_state surviving a logout -> different-user
+    # login in the same browser tab can't leak the previous user's nav
+    # selection (e.g. an admin's "Admin Dashboard" choice persisting into a
+    # normal user's session and breaking st.radio, since that label isn't a
+    # valid option for non-admins).
+    current_session_id = session_info.session_id if session_info else None
+    if current_session_id and st.session_state.get(ROLE_REDIRECT_DONE_KEY) != current_session_id:
+        if role == "admin":
+            st.session_state[NAV_KEY] = ADMIN_NAV_ITEM[1]
+        elif NAV_KEY in st.session_state:
+            del st.session_state[NAV_KEY]
+        st.session_state[ROLE_REDIRECT_DONE_KEY] = current_session_id
+
     with st.sidebar:
         st.markdown(
             """
@@ -125,7 +171,7 @@ def render_sidebar() -> str:
             st.markdown("<div style='height:0.6rem'></div>", unsafe_allow_html=True)
 
         st.markdown('<div class="gcc-nav-label">Navigate</div>', unsafe_allow_html=True)
-        labels = [label for _, label, _, _ in NAV_ITEMS]
+        labels = [label for _, label, _, _ in nav_items]
         selected_label = st.radio(
             "Navigate",
             options=labels,
@@ -136,7 +182,7 @@ def render_sidebar() -> str:
         st.markdown("---")
         render_session_info()
 
-    return _LABEL_TO_KEY[selected_label]
+    return label_to_key[selected_label]
 
 
 def render_main_app(session_manager):
@@ -146,11 +192,27 @@ def render_main_app(session_manager):
     Args:
         session_manager: Authenticated session manager instance.
     """
-    page_key = render_sidebar()
-    title, subtitle = _KEY_TO_TITLE[page_key]
+    session_info = session_manager.get_session_info()
+    role = session_info.role if session_info else "user"
+    nav_items = _nav_items_for_role(role)
+    key_to_title = {key: (title, subtitle) for key, _, title, subtitle in nav_items}
+
+    page_key = render_sidebar(session_manager)
+    title, subtitle = key_to_title[page_key]
     render_page_header(title, subtitle)
 
-    if page_key == "dashboard":
+    if page_key == "admin":
+        # Defensive re-check: only an admin-role session may render the
+        # admin dashboard, even if a stale nav selection somehow persisted
+        # across a role change (e.g. a demotion) within the same browser
+        # session's local storage.
+        if role == "admin":
+            from src.components.admin_panel import render_admin_dashboard_embedded
+
+            render_admin_dashboard_embedded(session_info)
+        else:
+            st.error("🔒 Admin access required.")
+    elif page_key == "dashboard":
         render_dashboard_page(session_manager)
     elif page_key == "upload":
         render_upload_page(session_manager)

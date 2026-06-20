@@ -194,10 +194,26 @@ class DatabaseManager:
             "ALTER TABLE research_results ADD COLUMN IF NOT EXISTS gcc_status VARCHAR(20)",
             "ALTER TABLE research_results ADD COLUMN IF NOT EXISTS fit_rating VARCHAR(20)",
             "ALTER TABLE research_results ADD COLUMN IF NOT EXISTS pain_points_summary TEXT",
+            # Role-based access control (admin dashboard vs. normal dashboard
+            # redirect on login). Existing rows default to 'user'.
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'user'",
         ]
         with self.get_session() as session:
             for statement in statements:
                 session.execute(text(statement))
+
+            # Bootstrap: if no admin-role user exists yet, promote the
+            # earliest-created account (id = MIN(id)) to admin so there's
+            # always at least one way into the admin dashboard after this
+            # migration runs, without guessing at a specific email address.
+            # Safe to run on every startup -- a no-op once any admin exists.
+            session.execute(text(
+                """
+                UPDATE users SET role = 'admin'
+                WHERE id = (SELECT MIN(id) FROM users)
+                  AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin')
+                """
+            ))
     
     def drop_tables(self) -> None:
         """Drop all database tables. Use with caution!"""

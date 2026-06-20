@@ -33,6 +33,12 @@ class SessionInfo:
     created_at: datetime
     expires_at: datetime
     is_active: bool = True
+    # Role-based access control: 'user' (normal dashboard) or 'admin'
+    # (redirected to the admin dashboard). Defaults to 'user' so older
+    # sessions created before this field existed still behave correctly.
+    role: str = "user"
+    full_name: Optional[str] = None
+    email: Optional[str] = None
 
     @property
     def is_expired(self) -> bool:
@@ -45,6 +51,11 @@ class SessionInfo:
         if self.is_expired:
             return timedelta(0)
         return self.expires_at - datetime.now(timezone.utc)
+
+    @property
+    def is_admin(self) -> bool:
+        """True if this session belongs to an admin-role user."""
+        return self.role == "admin"
 
 
 class SessionManager:
@@ -104,16 +115,16 @@ class SessionManager:
             with db_manager.get_session() as session:
                 # Use raw SQL to get all active users to avoid SQLAlchemy model issues
                 results = session.execute(text("""
-                    SELECT id, email, passcode, full_name, is_active, created_at, last_login, 
-                           password_history, last_password_change
-                    FROM users 
+                    SELECT id, email, passcode, full_name, is_active, created_at, last_login,
+                           password_history, last_password_change, role
+                    FROM users
                     WHERE is_active = true
                 """)).fetchall()
 
                 for row in results:
                     if verify_passcode(passcode, row.passcode):
                         logger.info(f"User authenticated successfully: user_id={row.id}")
-                        
+
                         # Create User object manually from raw result
                         user = User()
                         user.id = row.id
@@ -125,7 +136,8 @@ class SessionManager:
                         user.last_login = row.last_login
                         user.password_history = row.password_history
                         user.last_password_change = row.last_password_change
-                        
+                        user.role = row.role or "user"
+
                         return user
 
                 return None
@@ -153,15 +165,15 @@ class SessionManager:
                 # Use raw SQL to get user by email to avoid SQLAlchemy model caching issues
                 from sqlalchemy import text
                 result = session.execute(text("""
-                    SELECT id, email, passcode, full_name, is_active, created_at, last_login, 
-                           password_history, last_password_change
-                    FROM users 
+                    SELECT id, email, passcode, full_name, is_active, created_at, last_login,
+                           password_history, last_password_change, role
+                    FROM users
                     WHERE email = :email AND is_active = true
                 """), {"email": email.lower()}).fetchone()
 
                 if result and result.passcode and verify_passcode(password, result.passcode):
                     logger.info(f"User authenticated via email: user_id={result.id}, email={email}")
-                    
+
                     # Create User object manually from raw result
                     user = User()
                     user.id = result.id
@@ -173,7 +185,8 @@ class SessionManager:
                     user.last_login = result.last_login
                     user.password_history = result.password_history
                     user.last_password_change = result.last_password_change
-                    
+                    user.role = result.role or "user"
+
                     return user
 
                 return None
@@ -246,7 +259,10 @@ class SessionManager:
             session_id=session_id,
             created_at=created_at,
             expires_at=expires_at,
-            is_active=True
+            is_active=True,
+            role=getattr(user, "role", "user") or "user",
+            full_name=user.full_name,
+            email=user.email,
         )
         
         # Store in Streamlit session state
