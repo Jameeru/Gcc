@@ -422,7 +422,6 @@ def render_login_page() -> bool:
         True if authentication successful, False otherwise.
     """
     from ..utils.theme import clean_html
-    from .password_reset import EnhancedInputValidator
 
     st.markdown("<div class='gcc-login-wrap'>", unsafe_allow_html=True)
 
@@ -436,7 +435,7 @@ def render_login_page() -> bool:
                 """
                 <div class="gcc-login-logo">🏢</div>
                 <div class="gcc-login-title">GCC Research Intelligence</div>
-                <div class="gcc-login-subtitle">Sign in with your passcode to continue</div>
+                <div class="gcc-login-subtitle">Sign in with your email and password to continue</div>
                 """
             ),
             unsafe_allow_html=True,
@@ -451,44 +450,20 @@ def render_login_page() -> bool:
         result_holder = {"authenticated": False}
 
         with st.form("login_form", clear_on_submit=True):
-            # Authentication mode selection
-            auth_mode = st.radio(
-                "Authentication Method",
-                ["Email & Password", "Passcode Only"],
-                horizontal=True,
-                help="Choose your preferred login method"
+            email = st.text_input(
+                "Email Address",
+                placeholder="Enter your email",
+                help="Your registered email address",
+                label_visibility="visible",
             )
-            
-            if auth_mode == "Email & Password":
-                email = st.text_input(
-                    "Email Address",
-                    placeholder="Enter your email",
-                    help="Your registered email address",
-                    label_visibility="visible",
-                )
-                
-                password = st.text_input(
-                    "Password",
-                    type="password",
-                    placeholder="Enter your password",
-                    help="Your account password",
-                    label_visibility="visible",
-                )
-                
-                identifier = email
-                auth_password = password
-                
-            else:
-                passcode = st.text_input(
-                    "Passcode",
-                    type="password",
-                    placeholder="Enter passcode",
-                    help="Case-sensitive. Provided by your system administrator.",
-                    label_visibility="visible",
-                )
-                
-                identifier = passcode
-                auth_password = None
+
+            password = st.text_input(
+                "Password",
+                type="password",
+                placeholder="Enter your password",
+                help="Your account password",
+                label_visibility="visible",
+            )
 
             submit_button = st.form_submit_button(
                 "Sign In", type="primary", width='stretch'
@@ -496,55 +471,29 @@ def render_login_page() -> bool:
 
             if submit_button:
                 # Enhanced validation with required field checking
-                if auth_mode == "Email & Password":
-                    if not email or not password:
-                        st.error("🚫 Please enter both email and password.")
-                    elif not email.strip() or not password.strip():
-                        st.error("🚫 Email and password cannot be empty.")
-                    else:
-                        session_manager = SessionManager()
-                        with st.spinner("Verifying credentials…"):
-                            try:
-                                if session_manager.authenticate_user(email, password):
-                                    st.success("✅ Authenticated — redirecting…")
-                                    time.sleep(0.4)
-                                    result_holder["authenticated"] = True
-                                else:
-                                    st.error(
-                                        "❌ Invalid email or password. Check your credentials "
-                                        "or contact your administrator."
-                                    )
-                            except Exception as e:
-                                logger.error(f"Authentication error: {e}")
-                                st.error(
-                                    "⚠️ A system error occurred. Please try again "
-                                    "in a moment."
-                                )
+                if not email or not password:
+                    st.error("🚫 Please enter both email and password.")
+                elif not email.strip() or not password.strip():
+                    st.error("🚫 Email and password cannot be empty.")
                 else:
-                    # Passcode authentication
-                    validation = EnhancedInputValidator.validate_passcode_input(passcode)
-                    
-                    if not validation["valid"]:
-                        st.error(f"🚫 {validation['error']}")
-                    else:
-                        session_manager = SessionManager()
-                        with st.spinner("Verifying credentials…"):
-                            try:
-                                if session_manager.authenticate_user(passcode):
-                                    st.success("✅ Authenticated — redirecting…")
-                                    time.sleep(0.4)
-                                    result_holder["authenticated"] = True
-                                else:
-                                    st.error(
-                                        "❌ Incorrect passcode. Check for typos or "
-                                        "caps lock, or contact your administrator."
-                                    )
-                            except Exception as e:
-                                logger.error(f"Authentication error: {e}")
+                    session_manager = SessionManager()
+                    with st.spinner("Verifying credentials…"):
+                        try:
+                            if session_manager.authenticate_user(email, password):
+                                st.success("✅ Authenticated — redirecting…")
+                                time.sleep(0.4)
+                                result_holder["authenticated"] = True
+                            else:
                                 st.error(
-                                    "⚠️ A system error occurred. Please try again "
-                                    "in a moment."
+                                    "❌ Invalid email or password. Check your credentials "
+                                    "or contact your administrator."
                                 )
+                        except Exception as e:
+                            logger.error(f"Authentication error: {e}")
+                            st.error(
+                                "⚠️ A system error occurred. Please try again "
+                                "in a moment."
+                            )
 
         # Forgot password link
         st.markdown("<div style='text-align: center; margin-top: 15px;'>", unsafe_allow_html=True)
