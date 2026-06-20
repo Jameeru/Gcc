@@ -495,13 +495,6 @@ def render_login_page() -> bool:
                                 "in a moment."
                             )
 
-        # Forgot password link
-        st.markdown("<div style='text-align: center; margin-top: 15px;'>", unsafe_allow_html=True)
-        if st.button("🔑 Forgot Password?", key="forgot_password_link", help="Reset your password via email"):
-            st.session_state["show_reset_form"] = True
-            st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-
         st.markdown(
             clean_html(
                 """
